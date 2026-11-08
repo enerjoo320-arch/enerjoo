@@ -2,6 +2,20 @@ import { auth } from '../lib/firebase';
 import { Product, SOLAR_PANEL_BRANDS, SolarPanelBrand } from '../types';
 import { safeLocalStorage } from '../utils/safeStorage';
 
+export interface EnergyExchangeRecord {
+  price_id: string;
+  category: string;
+  brand: string;
+  product_type?: string;
+  price_per_watt: number;
+  currency: string;
+  min_wattage?: number | null;
+  max_wattage?: number | null;
+  effective_date?: string;
+  updated_at?: string;
+  updated_by?: string;
+}
+
 export const DEFAULT_SOLAR_PANEL_PRICES: Record<SolarPanelBrand, number> = {
   'Jinko': 8.50,
   'LONGi Solar': 12.20,
@@ -18,7 +32,8 @@ export const DEFAULT_SOLAR_PANEL_PRICES: Record<SolarPanelBrand, number> = {
   'ZNShine Solar': 11.80,
 };
 
-const STORAGE_KEY = 'enerjoo_solar_exchange_prices';
+const STORAGE_KEY_PRICES = 'enerjoo_solar_exchange_prices';
+const STORAGE_KEY_RECORDS = 'enerjoo_solar_exchange_records_v2';
 
 /**
  * Robustly matches an existing product to its approved solar panel brand.
@@ -63,37 +78,130 @@ export function getSolarPanelWattage(product: Product): number {
   return 0;
 }
 
+export interface BrandPriceMatchResult {
+  matchedBrand: SolarPanelBrand | null;
+  pricePerWatt: number | null;
+  isRangeMatch: boolean;
+  isOutOfBounds: boolean;
+  minWattage?: number | null;
+  maxWattage?: number | null;
+  record?: EnergyExchangeRecord | null;
+}
+
 /**
- * Computes pricing for a product based on the centralized Energy Exchange:
- * Panel Price = Panel Power (W) × Brand Price Per Watt
+ * Finds matching price per watt for a brand and wattage using records:
+ * 1. Range matching if wattage ranges are defined for the brand.
+ * 2. Legacy fallback if no ranges exist for the brand.
+ * 3. Default price fallback if no DB records exist.
+ * 4. Out of bounds if ranges exist but wattage doesn't fall in any defined range.
+ */
+export function findMatchingBrandPricePerWatt(
+  records: EnergyExchangeRecord[],
+  brandName?: string,
+  productName?: string,
+  wattage?: number
+): BrandPriceMatchResult {
+  const matchedBrand = matchBrandToExchange(brandName, productName);
+  if (!matchedBrand) {
+    return { matchedBrand: null, pricePerWatt: null, isRangeMatch: false, isOutOfBounds: false, record: null };
+  }
+
+  // Filter records for this brand
+  const brandRecords = records.filter(r => {
+    const bMatch = matchBrandToExchange(r.brand);
+    return bMatch === matchedBrand || r.brand.toLowerCase() === matchedBrand.toLowerCase();
+  });
+
+  const rangeRecords = brandRecords.filter(r => r.min_wattage != null && r.max_wattage != null);
+  const legacyRecords = brandRecords.filter(r => r.min_wattage == null || r.max_wattage == null);
+
+  // If wattage is provided and brand has range records:
+  if (wattage !== undefined && wattage > 0 && rangeRecords.length > 0) {
+    const matchedRange = rangeRecords.find(r => r.min_wattage! <= wattage && r.max_wattage! >= wattage);
+    if (matchedRange) {
+      return {
+        matchedBrand,
+        pricePerWatt: matchedRange.price_per_watt,
+        isRangeMatch: true,
+        isOutOfBounds: false,
+        minWattage: matchedRange.min_wattage,
+        maxWattage: matchedRange.max_wattage,
+        record: matchedRange
+      };
+    }
+    // Out of bounds warning if ranges exist but wattage doesn't fit
+    return {
+      matchedBrand,
+      pricePerWatt: null,
+      isRangeMatch: false,
+      isOutOfBounds: true,
+      record: null
+    };
+  }
+
+  // Fallback to legacy record if present
+  if (legacyRecords.length > 0) {
+    const legacy = legacyRecords[0];
+    return {
+      matchedBrand,
+      pricePerWatt: legacy.price_per_watt,
+      isRangeMatch: false,
+      isOutOfBounds: false,
+      record: legacy
+    };
+  }
+
+  // Fallback to default static price
+  const defaultPrice = DEFAULT_SOLAR_PANEL_PRICES[matchedBrand] ?? 12.00;
+  return {
+    matchedBrand,
+    pricePerWatt: defaultPrice,
+    isRangeMatch: false,
+    isOutOfBounds: false,
+    record: null
+  };
+}
+
+/**
+ * Computes pricing for a product based on Centralized Energy Exchange:
+ * Panel Price = Panel Power (W) × Brand Price Per Watt (matched to range)
  * ONLY applies to solar panels. All other product categories remain strictly untouched.
+ * Catalog prices are NEVER overwritten in Firestore/D1 `products` table.
  */
 export function applySolarPanelPricing(
   product: Product,
-  brandPrices: Record<string, number>
+  brandPrices: Record<string, number>,
+  records: EnergyExchangeRecord[] = []
 ): Product {
   if (product.category !== 'panels') {
     return product;
   }
 
-  const matchedBrand = matchBrandToExchange(product.brand, product.name);
+  const wattage = getSolarPanelWattage(product);
+  const matchResult = findMatchingBrandPricePerWatt(records, product.brand, product.name, wattage > 0 ? wattage : undefined);
+
+  const matchedBrand = matchResult.matchedBrand || matchBrandToExchange(product.brand, product.name);
   if (!matchedBrand) {
     return product;
   }
 
-  const pricePerWatt = brandPrices[matchedBrand] ?? DEFAULT_SOLAR_PANEL_PRICES[matchedBrand];
-  if (!pricePerWatt || pricePerWatt <= 0) {
-    return product;
+  // If wattage is out of bounds for defined ranges, keep original catalog price intact
+  if (matchResult.isOutOfBounds || matchResult.pricePerWatt == null) {
+    const fallbackPrice = brandPrices[matchedBrand] ?? DEFAULT_SOLAR_PANEL_PRICES[matchedBrand];
+    return {
+      ...product,
+      exchangeBrand: matchedBrand,
+      pricePerWatt: fallbackPrice
+    };
   }
 
-  // If the admin explicitly edited/overrode this panel's price, preserve the custom price
+  const pricePerWatt = matchResult.pricePerWatt;
+
+  // Preserve admin custom override if set on product
   const customPrice = Number(product.specs?.customPrice ?? (product as any).customPrice ?? 0);
   if (customPrice > 0) {
     const updatedSuppliers = (product.suppliers && product.suppliers.length > 0)
-      ? product.suppliers.map(s => ({
-          ...s,
-          price: customPrice
-        }))
+      ? product.suppliers.map(s => ({ ...s, price: customPrice }))
       : product.suppliers;
     return {
       ...product,
@@ -104,7 +212,6 @@ export function applySolarPanelPricing(
     };
   }
 
-  const wattage = getSolarPanelWattage(product);
   if (wattage <= 0) {
     return {
       ...product,
@@ -115,12 +222,8 @@ export function applySolarPanelPricing(
 
   const calculatedPrice = Math.round(wattage * pricePerWatt);
 
-  // Synchronize supplier entries so that supplier cards in ProductDetail reflect the updated exchange price
   const updatedSuppliers = (product.suppliers && product.suppliers.length > 0)
-    ? product.suppliers.map(s => ({
-        ...s,
-        price: calculatedPrice
-      }))
+    ? product.suppliers.map(s => ({ ...s, price: calculatedPrice }))
     : product.suppliers;
 
   return {
@@ -137,9 +240,10 @@ export function applySolarPanelPricing(
  */
 export function applySolarPanelPricingToProducts(
   products: Product[],
-  brandPrices: Record<string, number>
+  brandPrices: Record<string, number>,
+  records: EnergyExchangeRecord[] = []
 ): Product[] {
-  return products.map(p => applySolarPanelPricing(p, brandPrices));
+  return products.map(p => applySolarPanelPricing(p, brandPrices, records));
 }
 
 /**
@@ -147,7 +251,7 @@ export function applySolarPanelPricingToProducts(
  */
 export function getInitialExchangePrices(): Record<string, number> {
   try {
-    const raw = safeLocalStorage.getItem(STORAGE_KEY);
+    const raw = safeLocalStorage.getItem(STORAGE_KEY_PRICES);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
@@ -160,43 +264,61 @@ export function getInitialExchangePrices(): Record<string, number> {
   return { ...DEFAULT_SOLAR_PANEL_PRICES };
 }
 
-// Active in-memory listeners
-type ExchangeListener = (prices: Record<string, number>) => void;
-const listeners = new Set<ExchangeListener>();
-let currentPrices: Record<string, number> = getInitialExchangePrices();
-
-function notifyListeners(prices: Record<string, number>) {
-  currentPrices = prices;
+/**
+ * Gets cached exchange records from localStorage or empty array.
+ */
+export function getInitialExchangeRecords(): EnergyExchangeRecord[] {
   try {
-    safeLocalStorage.setItem(STORAGE_KEY, JSON.stringify(prices));
+    const raw = safeLocalStorage.getItem(STORAGE_KEY_RECORDS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
   } catch {
     // ignore
   }
-  listeners.forEach(cb => {
+  return [];
+}
+
+type ExchangeRecordsListener = (records: EnergyExchangeRecord[], prices: Record<string, number>) => void;
+const recordsListeners = new Set<ExchangeRecordsListener>();
+let currentRecords: EnergyExchangeRecord[] = getInitialExchangeRecords();
+let currentPricesMap: Record<string, number> = getInitialExchangePrices();
+
+function notifyRecordsListeners(records: EnergyExchangeRecord[], prices: Record<string, number>) {
+  currentRecords = records;
+  currentPricesMap = prices;
+  try {
+    safeLocalStorage.setItem(STORAGE_KEY_RECORDS, JSON.stringify(records));
+    safeLocalStorage.setItem(STORAGE_KEY_PRICES, JSON.stringify(prices));
+  } catch {
+    // ignore
+  }
+  recordsListeners.forEach(cb => {
     try {
-      cb(prices);
+      cb(records, prices);
     } catch (err) {
-      console.error('Error in exchange listener:', err);
+      console.error('Error in exchange records listener:', err);
     }
   });
 }
 
 /**
- * Subscribes to real-time updates from Backend API and LocalStorage.
- * Completely independent of Firebase/Firestore to ensure Cloudflare D1 is the single source of truth.
- * Ensures all sessions (guests, customers, suppliers, admins) stay strictly synchronized.
+ * Subscribes to real-time updates from Cloudflare D1 Backend API.
  */
 export function subscribeToEnergyExchange(
-  callback: (prices: Record<string, number>) => void
+  callback: (prices: Record<string, number>, records?: EnergyExchangeRecord[]) => void
 ): () => void {
-  listeners.add(callback);
-  // Send current cached value immediately
-  callback(currentPrices);
+  const wrapper: ExchangeRecordsListener = (records, prices) => {
+    callback(prices, records);
+  };
 
-  const fetchExchangePrices = async () => {
+  recordsListeners.add(wrapper);
+  callback(currentPricesMap, currentRecords);
+
+  const fetchExchangeData = async () => {
     if (typeof window === 'undefined') return;
     try {
-      // Force non-cached request with timestamp query and Cache-Control headers
       const res = await fetch(`/api/energy-exchange/prices?_t=${Date.now()}`, {
         cache: 'no-store',
         headers: {
@@ -206,9 +328,14 @@ export function subscribeToEnergyExchange(
       });
       if (res.ok) {
         const data = await res.json();
-        if (data && data.success && data.prices) {
-          notifyListeners({ ...DEFAULT_SOLAR_PANEL_PRICES, ...data.prices });
-        }
+        const recordsList: EnergyExchangeRecord[] = Array.isArray(data.records)
+          ? data.records
+          : (Array.isArray(data.data) ? data.data : []);
+        const pricesObj = data.prices && typeof data.prices === 'object'
+          ? { ...DEFAULT_SOLAR_PANEL_PRICES, ...data.prices }
+          : { ...DEFAULT_SOLAR_PANEL_PRICES };
+
+        notifyRecordsListeners(recordsList, pricesObj);
       }
     } catch (err) {
       console.warn('Notice fetching /api/energy-exchange/prices:', err);
@@ -221,27 +348,23 @@ export function subscribeToEnergyExchange(
   let handleStorageChange: ((e: StorageEvent) => void) | null = null;
 
   if (typeof window !== 'undefined') {
-    // 1. Initial fetch from API (immediate upon component mount)
-    fetchExchangePrices();
+    fetchExchangeData();
 
-    // 2. Immediate re-fetch on window focus and document visibility
-    handleFocus = () => fetchExchangePrices();
+    handleFocus = () => fetchExchangeData();
     handleVisibility = () => {
-      if (document.visibilityState === 'visible') fetchExchangePrices();
+      if (document.visibilityState === 'visible') fetchExchangeData();
     };
     window.addEventListener('focus', handleFocus);
     document.addEventListener('visibilitychange', handleVisibility);
 
-    // 3. Periodic synchronization every 10 seconds for real-time consistency
-    intervalId = setInterval(fetchExchangePrices, 10_000);
+    intervalId = setInterval(fetchExchangeData, 10_000);
 
-    // 4. Synchronize immediately across multiple open browser tabs/windows
     handleStorageChange = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY && e.newValue) {
+      if (e.key === STORAGE_KEY_RECORDS && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
-          if (parsed && typeof parsed === 'object') {
-            notifyListeners({ ...DEFAULT_SOLAR_PANEL_PRICES, ...parsed });
+          if (Array.isArray(parsed)) {
+            notifyRecordsListeners(parsed, currentPricesMap);
           }
         } catch {
           // ignore
@@ -252,7 +375,7 @@ export function subscribeToEnergyExchange(
   }
 
   return () => {
-    listeners.delete(callback);
+    recordsListeners.delete(wrapper);
     if (typeof window !== 'undefined') {
       if (handleFocus) window.removeEventListener('focus', handleFocus);
       if (handleVisibility) document.removeEventListener('visibilitychange', handleVisibility);
@@ -263,8 +386,159 @@ export function subscribeToEnergyExchange(
 }
 
 /**
- * Admin action: Updates the price per watt for a solar panel brand in Cloudflare D1.
- * Strictly verifies server/D1 confirmation before updating UI and notifying listeners.
+ * Admin action: Adds a new Wattage Range for a solar panel brand in Cloudflare D1.
+ * Atomic overlap validation enforced on D1 backend.
+ */
+export async function addSolarPanelBrandRange(
+  brand: string,
+  minWattage: number,
+  maxWattage: number,
+  pricePerWatt: number
+): Promise<EnergyExchangeRecord> {
+  if (!brand || !brand.trim()) throw new Error('يرجى تحديد العلامة التجارية');
+  if (!minWattage || minWattage <= 0) throw new Error('الحد الأدنى للقدرة يجب أن يكون أكبر من 0 وات');
+  if (!maxWattage || maxWattage < minWattage) throw new Error('الحد الأقصى للقدرة يجب أن يكون أكبر من أو يساوي الحد الأدنى');
+  if (!pricePerWatt || pricePerWatt <= 0) throw new Error('يرجى إدخال سعر صحيح أكبر من الصفر');
+
+  const roundedPrice = parseFloat(pricePerWatt.toFixed(2));
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache, no-store, must-revalidate'
+  };
+
+  try {
+    const token = await auth.currentUser?.getIdToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  } catch {
+    // optional token
+  }
+
+  const res = await fetch(`/api/energy-exchange/prices?_t=${Date.now()}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      brand: brand.trim(),
+      min_wattage: minWattage,
+      max_wattage: maxWattage,
+      price_per_watt: roundedPrice,
+      category: 'panels',
+      product_type: 'Solar Panel',
+      currency: 'EGP'
+    })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    const errMsg = data?.error?.message || data?.error || 'فشل إضافة نطاق القدرة في قاعدة البيانات';
+    throw new Error(typeof errMsg === 'string' ? errMsg : 'فشل إضافة نطاق القدرة');
+  }
+
+  // Trigger refresh
+  const getRes = await fetch(`/api/energy-exchange/prices?_t=${Date.now()}`);
+  if (getRes.ok) {
+    const latest = await getRes.json();
+    const recordsList: EnergyExchangeRecord[] = Array.isArray(latest.records) ? latest.records : [];
+    const pricesObj = latest.prices || currentPricesMap;
+    notifyRecordsListeners(recordsList, pricesObj);
+  }
+
+  return data;
+}
+
+/**
+ * Admin action: Updates an existing Wattage Range in Cloudflare D1.
+ */
+export async function updateSolarPanelBrandRange(
+  priceId: string,
+  brand: string,
+  minWattage: number,
+  maxWattage: number,
+  pricePerWatt: number
+): Promise<void> {
+  if (!priceId) throw new Error('Missing price ID for range update');
+  if (!minWattage || minWattage <= 0) throw new Error('الحد الأدنى للقدرة يجب أن يكون أكبر من 0 وات');
+  if (!maxWattage || maxWattage < minWattage) throw new Error('الحد الأقصى للقدرة يجب أن يكون أكبر من أو يساوي الحد الأدنى');
+  if (!pricePerWatt || pricePerWatt <= 0) throw new Error('يرجى إدخال سعر صحيح أكبر من الصفر');
+
+  const roundedPrice = parseFloat(pricePerWatt.toFixed(2));
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache, no-store, must-revalidate'
+  };
+
+  try {
+    const token = await auth.currentUser?.getIdToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  } catch {
+    // optional token
+  }
+
+  const res = await fetch(`/api/energy-exchange/prices/${encodeURIComponent(priceId)}?_t=${Date.now()}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      price_id: priceId,
+      brand: brand.trim(),
+      min_wattage: minWattage,
+      max_wattage: maxWattage,
+      price_per_watt: roundedPrice
+    })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    const errMsg = data?.error?.message || data?.error || 'فشل تعديل نطاق القدرة في قاعدة البيانات';
+    throw new Error(typeof errMsg === 'string' ? errMsg : 'فشل تعديل نطاق القدرة');
+  }
+
+  const getRes = await fetch(`/api/energy-exchange/prices?_t=${Date.now()}`);
+  if (getRes.ok) {
+    const latest = await getRes.json();
+    const recordsList: EnergyExchangeRecord[] = Array.isArray(latest.records) ? latest.records : [];
+    const pricesObj = latest.prices || currentPricesMap;
+    notifyRecordsListeners(recordsList, pricesObj);
+  }
+}
+
+/**
+ * Admin action: Deletes a Wattage Range from Cloudflare D1.
+ */
+export async function deleteSolarPanelBrandRange(priceId: string): Promise<void> {
+  if (!priceId) throw new Error('Missing price ID for deletion');
+
+  const headers: Record<string, string> = {
+    'Cache-Control': 'no-cache, no-store, must-revalidate'
+  };
+
+  try {
+    const token = await auth.currentUser?.getIdToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  } catch {
+    // optional token
+  }
+
+  const res = await fetch(`/api/energy-exchange/prices/${encodeURIComponent(priceId)}?_t=${Date.now()}`, {
+    method: 'DELETE',
+    headers
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    const errMsg = data?.error?.message || data?.error || 'فشل حذف النطاق من قاعدة البيانات';
+    throw new Error(typeof errMsg === 'string' ? errMsg : 'فشل حذف النطاق');
+  }
+
+  const getRes = await fetch(`/api/energy-exchange/prices?_t=${Date.now()}`);
+  if (getRes.ok) {
+    const latest = await getRes.json();
+    const recordsList: EnergyExchangeRecord[] = Array.isArray(latest.records) ? latest.records : [];
+    const pricesObj = latest.prices || currentPricesMap;
+    notifyRecordsListeners(recordsList, pricesObj);
+  }
+}
+
+/**
+ * Legacy support function for flat price updates
  */
 export async function updateSolarPanelBrandPrice(
   brand: SolarPanelBrand,
@@ -276,86 +550,37 @@ export async function updateSolarPanelBrandPrice(
   }
 
   const rounded = parseFloat(newPricePerWatt.toFixed(2));
-  const effectiveEmail = adminEmail || auth.currentUser?.email || 'enerjoo320@gmail.com';
-
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Cache-Control': 'no-cache, no-store, must-revalidate',
-    'Pragma': 'no-cache'
+    'Cache-Control': 'no-cache, no-store, must-revalidate'
   };
 
   try {
     const token = await auth.currentUser?.getIdToken();
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+    if (token) headers['Authorization'] = `Bearer ${token}`;
   } catch {
-    // Non-blocking
+    // optional
   }
 
-  // 1. Send PUT request to Cloudflare D1 endpoint via /api/energy-exchange/prices/:id
-  const encodedBrand = encodeURIComponent(brand);
-  let res: Response;
-  try {
-    res = await fetch(`/api/energy-exchange/prices/${encodedBrand}?_t=${Date.now()}`, {
-      method: 'PUT',
-      cache: 'no-store',
-      headers,
-      body: JSON.stringify({
-        brand,
-        price_per_watt: rounded,
-        pricePerWatt: rounded,
-        adminEmail: effectiveEmail,
-        updated_by: effectiveEmail
-      })
-    });
-  } catch (netErr: any) {
-    throw new Error('فشل الاتصال بالخادم، يرجى التحقق من اتصالك بالإنترنت');
-  }
-
-  // Fallback: If PUT was not supported by an older proxy, attempt POST /api/energy-exchange
-  if (!res.ok && res.status !== 403 && res.status !== 400) {
-    try {
-      const fallbackRes = await fetch(`/api/energy-exchange?_t=${Date.now()}`, {
-        method: 'POST',
-        cache: 'no-store',
-        headers,
-        body: JSON.stringify({
-          brand,
-          pricePerWatt: rounded,
-          price_per_watt: rounded,
-          adminEmail: effectiveEmail,
-          updated_by: effectiveEmail
-        })
-      });
-      if (fallbackRes.ok) {
-        res = fallbackRes;
-      }
-    } catch {
-      // Keep original response
-    }
-  }
+  const res = await fetch(`/api/energy-exchange/prices/${encodeURIComponent(brand)}?_t=${Date.now()}`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      brand,
+      price_per_watt: rounded,
+      adminEmail
+    })
+  });
 
   if (!res.ok) {
-    let errMessage = 'فشل حفظ السعر في قاعدة البيانات، يرجى المحاولة مجدداً';
-    try {
-      const errJson = await res.json();
-      if (errJson && errJson.error) {
-        errMessage = typeof errJson.error === 'string' ? errJson.error : (errJson.error.message || errMessage);
-      }
-    } catch {
-      // keep default errMessage
-    }
-    throw new Error(errMessage);
+    const data = await res.json().catch(() => ({}));
+    const errMsg = data?.error?.message || data?.error || 'فشل حفظ السعر في قاعدة البيانات';
+    throw new Error(typeof errMsg === 'string' ? errMsg : 'فشل حفظ السعر');
   }
 
   const data = await res.json();
-  const confirmedPrices = data.prices && typeof data.prices === 'object'
-    ? { ...DEFAULT_SOLAR_PANEL_PRICES, ...currentPrices, ...data.prices }
-    : { ...currentPrices, [brand]: rounded };
-
-  // ONLY after confirmed D1 write, notify listeners and update application state
-  notifyListeners(confirmedPrices);
+  const confirmedPrices = data.prices || { ...currentPricesMap, [brand]: rounded };
+  notifyRecordsListeners(currentRecords, confirmedPrices);
 
   return { success: true, brand, pricePerWatt: rounded };
 }

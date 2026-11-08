@@ -3091,8 +3091,8 @@ ${urls.join("\n")}
     return false;
   };
 
-  // GET /api/energy-exchange and /api/energy-exchange/prices
-  app.get(["/api/energy-exchange", "/api/energy-exchange/prices", "/energy-exchange/prices"], async (req, res) => {
+  // GET /api/energy-exchange, /api/energy-exchange/prices, /api/energy-exchange/ranges
+  app.get(["/api/energy-exchange", "/api/energy-exchange/prices", "/api/energy-exchange/ranges", "/energy-exchange/prices"], async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
@@ -3100,6 +3100,7 @@ ${urls.join("\n")}
 
     loadExchangePricesFromFile();
 
+    let remoteRecords: any[] = [];
     // Sync from remote Cloudflare Worker D1 if available
     try {
       const cfRes = await fetch(`${CF_WORKER_API}/energy-exchange/prices`, {
@@ -3111,12 +3112,17 @@ ${urls.join("\n")}
           memoryExchangePrices = { ...memoryExchangePrices, ...cfData.prices };
           saveExchangePricesToFile();
         }
+        if (Array.isArray(cfData.records)) {
+          remoteRecords = cfData.records;
+        } else if (Array.isArray(cfData.data)) {
+          remoteRecords = cfData.data;
+        }
       }
     } catch {
       // Worker offline or initializing, safely rely on file cache
     }
 
-    const structuredData = Object.entries(memoryExchangePrices).map(([brand, price_per_watt]) => {
+    const structuredData = remoteRecords.length > 0 ? remoteRecords : Object.entries(memoryExchangePrices).map(([brand, price_per_watt]) => {
       const cleanBrand = brand.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
       return {
         price_id: `PRICE_PANEL_${cleanBrand}`,
@@ -3135,15 +3141,49 @@ ${urls.join("\n")}
       count: structuredData.length,
       prices: memoryExchangePrices,
       data: structuredData,
+      records: structuredData,
       updatedAt: new Date().toISOString()
     });
   });
 
-  // PUT /api/energy-exchange/prices/:id
-  app.put(["/api/energy-exchange/prices/:id", "/api/energy-exchange/:id"], async (req, res) => {
+  // DELETE /api/energy-exchange/prices/:id, /api/energy-exchange/ranges/:id
+  app.delete(["/api/energy-exchange/prices/:id", "/api/energy-exchange/ranges/:id", "/api/energy-exchange/:id"], async (req, res) => {
     try {
       const targetId = req.params.id;
-      const { price_per_watt, pricePerWatt, adminEmail, updated_by } = req.body || {};
+      if (!isEnergyExchangeAdminAuthorized(req, "")) {
+        return res.status(403).json({
+          success: false,
+          ok: false,
+          error: {
+            code: "FORBIDDEN",
+            message: "عذراً، حذف أسعار أو نطاقات بورصة الطاقة مخصص للمسؤولين المعتمدين فقط."
+          }
+        });
+      }
+
+      const authHeader = extractBearerAuthHeader(req);
+      const cfRes = await fetch(`${CF_WORKER_API}/energy-exchange/prices/${encodeURIComponent(targetId)}`, {
+        method: "DELETE",
+        headers: {
+          "Origin": "https://enerjoo.com",
+          ...(authHeader ? { "Authorization": authHeader } : {})
+        },
+        signal: AbortSignal.timeout(6000)
+      });
+
+      const data = await cfRes.text();
+      res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(data);
+    } catch (err: any) {
+      console.error("Error in DELETE /api/energy-exchange/prices/:id:", err);
+      res.status(500).json({ success: false, error: "Failed to delete exchange record" });
+    }
+  });
+
+  // PUT /api/energy-exchange/prices/:id, /api/energy-exchange/ranges/:id
+  app.put(["/api/energy-exchange/prices/:id", "/api/energy-exchange/ranges/:id", "/api/energy-exchange/:id"], async (req, res) => {
+    try {
+      const targetId = req.params.id;
+      const { price_per_watt, pricePerWatt, min_wattage, max_wattage, brand, adminEmail, updated_by } = req.body || {};
       const callerEmail = adminEmail || updated_by || "";
 
       if (!isEnergyExchangeAdminAuthorized(req, callerEmail)) {
@@ -3157,78 +3197,48 @@ ${urls.join("\n")}
         });
       }
 
-      const rawPrice = Number(price_per_watt ?? pricePerWatt);
-      if (!Number.isFinite(rawPrice) || rawPrice <= 0 || rawPrice > 200) {
-        return res.status(400).json({
-          success: false,
-          ok: false,
-          error: {
-            code: "INVALID_PRICE",
-            message: "يرجى إدخال سعر صحيح أكبر من الصفر وأقل من 200 جنيه/وات."
-          }
-        });
-      }
-
-      const roundedPrice = parseFloat(rawPrice.toFixed(2));
-
-      // Resolve brand name from targetId (e.g. 'Jinko' or 'PRICE_PANEL_JINKO')
-      let matchedBrand = targetId;
-      for (const b of Object.keys(DEFAULT_EXCHANGE_PRICES)) {
-        if (
-          b.toLowerCase() === targetId.toLowerCase() ||
-          `PRICE_PANEL_${b.toUpperCase().replace(/[^A-Z0-9]/g, '_')}` === targetId.toUpperCase()
-        ) {
-          matchedBrand = b;
-          break;
-        }
-      }
-
-      // 1. Forward to Cloudflare Worker D1 endpoint
+      // Forward to Cloudflare Worker D1 endpoint
+      let workerStatus = 200;
+      let workerDataText = "";
       try {
         const authHeader = extractBearerAuthHeader(req);
-        await fetch(`${CF_WORKER_API}/energy-exchange/prices/${encodeURIComponent(targetId)}`, {
+        const cfRes = await fetch(`${CF_WORKER_API}/energy-exchange/prices/${encodeURIComponent(targetId)}`, {
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
             "Origin": "https://enerjoo.com",
             ...(authHeader ? { "Authorization": authHeader } : {})
           },
-          body: JSON.stringify({
-            brand: matchedBrand,
-            price_per_watt: roundedPrice,
-            adminEmail: callerEmail || "admin"
-          }),
+          body: JSON.stringify(req.body),
           signal: AbortSignal.timeout(6000)
         });
+
+        workerStatus = cfRes.status;
+        workerDataText = await cfRes.text();
+
+        if (!cfRes.ok) {
+          return res.status(workerStatus).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(workerDataText);
+        }
       } catch (cfErr) {
         console.warn("Notice: could not reach remote Cloudflare Worker directly:", cfErr);
       }
 
-      // 2. Persist in Single Source of Truth file & memory
-      loadExchangePricesFromFile();
-      memoryExchangePrices[matchedBrand] = roundedPrice;
-      saveExchangePricesToFile();
+      const rawPrice = Number(price_per_watt ?? pricePerWatt);
+      if (Number.isFinite(rawPrice) && rawPrice > 0) {
+        const roundedPrice = parseFloat(rawPrice.toFixed(2));
+        if (brand) memoryExchangePrices[brand] = roundedPrice;
+        saveExchangePricesToFile();
+      }
 
-      const cleanBrand = matchedBrand.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
-      const record = {
-        price_id: `PRICE_PANEL_${cleanBrand}`,
-        category: 'panels',
-        brand: matchedBrand,
-        product_type: 'Solar Panel',
-        price_per_watt: roundedPrice,
-        currency: 'EGP',
-        updated_at: new Date().toISOString(),
-        updated_by: callerEmail || 'admin'
-      };
+      if (workerDataText) {
+        return res.status(workerStatus).set("Content-Type", "application/json").send(workerDataText);
+      }
 
       res.json({
         success: true,
         ok: true,
-        message: "تم حفظ السعر في Cloudflare D1 وبورصة الطاقة بنجاح",
-        brand: matchedBrand,
-        price_per_watt: roundedPrice,
-        prices: memoryExchangePrices,
-        record
+        message: "تم حفظ السعر والتحديث بنجاح",
+        prices: memoryExchangePrices
       });
     } catch (err: any) {
       console.error("Error in PUT /api/energy-exchange/prices/:id:", err);
@@ -3236,8 +3246,8 @@ ${urls.join("\n")}
     }
   });
 
-  // POST /api/energy-exchange and /api/energy-exchange/prices
-  app.post(["/api/energy-exchange", "/api/energy-exchange/prices"], async (req, res) => {
+  // POST /api/energy-exchange, /api/energy-exchange/prices, /api/energy-exchange/ranges
+  app.post(["/api/energy-exchange", "/api/energy-exchange/prices", "/api/energy-exchange/ranges"], async (req, res) => {
     try {
       const { brand, price_per_watt, pricePerWatt, prices, adminEmail, updated_by } = req.body || {};
       const callerEmail = adminEmail || updated_by || "";
@@ -3253,63 +3263,50 @@ ${urls.join("\n")}
         });
       }
 
-      loadExchangePricesFromFile();
+      // Forward to Cloudflare Worker D1 endpoint
+      let workerStatus = 200;
+      let workerDataText = "";
+      try {
+        const authHeader = extractBearerAuthHeader(req);
+        const cfRes = await fetch(`${CF_WORKER_API}/energy-exchange/prices`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Origin": "https://enerjoo.com",
+            ...(authHeader ? { "Authorization": authHeader } : {})
+          },
+          body: JSON.stringify(req.body),
+          signal: AbortSignal.timeout(6000)
+        });
 
-      if (brand) {
-        const rawPrice = Number(price_per_watt ?? pricePerWatt);
-        if (!Number.isFinite(rawPrice) || rawPrice <= 0 || rawPrice > 200) {
-          return res.status(400).json({
-            success: false,
-            ok: false,
-            error: {
-              code: "INVALID_PRICE",
-              message: "يرجى إدخال سعر صحيح أكبر من الصفر وأقل من 200 جنيه/وات."
-            }
-          });
-        }
-        const roundedPrice = parseFloat(rawPrice.toFixed(2));
-        memoryExchangePrices[brand.trim()] = roundedPrice;
+        workerStatus = cfRes.status;
+        workerDataText = await cfRes.text();
 
-        // Forward to Cloudflare Worker
-        try {
-          const authHeader = extractBearerAuthHeader(req);
-          await fetch(`${CF_WORKER_API}/energy-exchange/prices`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Origin": "https://enerjoo.com",
-              ...(authHeader ? { "Authorization": authHeader } : {})
-            },
-            body: JSON.stringify({
-              brand: brand.trim(),
-              price_per_watt: roundedPrice,
-              adminEmail: callerEmail || "admin"
-            }),
-            signal: AbortSignal.timeout(6000)
-          });
-        } catch (cfErr) {
-          console.warn("Notice: could not reach remote Cloudflare Worker directly:", cfErr);
+        if (!cfRes.ok) {
+          return res.status(workerStatus).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(workerDataText);
         }
-      } else if (prices && typeof prices === "object" && !Array.isArray(prices)) {
-        for (const [k, v] of Object.entries(prices)) {
-          const numV = Number(v);
-          if (typeof k === "string" && Number.isFinite(numV) && numV > 0 && numV <= 200) {
-            memoryExchangePrices[k.trim()] = parseFloat(numV.toFixed(2));
-          }
-        }
-      } else {
-        return res.status(400).json({ success: false, error: "Missing valid brand or prices object" });
+      } catch (cfErr) {
+        console.warn("Notice: could not reach remote Cloudflare Worker directly:", cfErr);
       }
 
+      loadExchangePricesFromFile();
+      if (brand && (price_per_watt || pricePerWatt)) {
+        const rawPrice = Number(price_per_watt ?? pricePerWatt);
+        if (Number.isFinite(rawPrice) && rawPrice > 0) {
+          memoryExchangePrices[brand.trim()] = parseFloat(rawPrice.toFixed(2));
+        }
+      }
       saveExchangePricesToFile();
+
+      if (workerDataText) {
+        return res.status(workerStatus).set("Content-Type", "application/json").send(workerDataText);
+      }
 
       res.json({
         success: true,
         ok: true,
-        message: "تم حفظ السعر في Cloudflare D1 وبورصة الطاقة بنجاح",
-        prices: memoryExchangePrices,
-        updatedAt: new Date().toISOString(),
-        updatedBy: callerEmail || "admin"
+        message: "تم حفظ نطاق السعر في بورصة الطاقة بنجاح",
+        prices: memoryExchangePrices
       });
     } catch (err: any) {
       console.error("Error in POST /api/energy-exchange:", err);
