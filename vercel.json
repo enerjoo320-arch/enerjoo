@@ -1,0 +1,91 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/chat",
+      "destination": "https://fiyg.app.n8n.cloud/webhook/enerjoo-chat"
+    },
+    {
+      "source": "/api/chat/:path*",
+      "destination": "https://fiyg.app.n8n.cloud/webhook/enerjoo-chat"
+    },
+    {
+      "source": "/chat",
+      "destination": "https://fiyg.app.n8n.cloud/webhook/enerjoo-chat"
+    },
+    {
+      "source": "/chat/:path*",
+      "destination": "https://fiyg.app.n8n.cloud/webhook/enerjoo-chat"
+    },
+    {
+      "source": "/api/products/:path*",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/products/:path*"
+    },
+    {
+      "source": "/api/products",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/products"
+    },
+    {
+      "source": "/api/customers/:path*",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/customers/:path*"
+    },
+    {
+      "source": "/api/customers",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/customers"
+    },
+    {
+      "source": "/api/users/:path*",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/users/:path*"
+    },
+    {
+      "source": "/api/users",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/users"
+    },
+    {
+      "source": "/api/suppliers/:path*",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/suppliers/:path*"
+    },
+    {
+      "source": "/api/suppliers",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/suppliers"
+    },
+    {
+      "source": "/api/solar-requests/:path*",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/solar-requests/:path*"
+    },
+    {
+      "source": "/api/solar-requests",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/solar-requests"
+    },
+    {
+      "source": "/api/quotations/:path*",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/quotations/:path*"
+    },
+    {
+      "source": "/api/quotations",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/quotations"
+    },
+    {
+      "source": "/api/quotation-items/:path*",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/quotation-items/:path*"
+    },
+    {
+      "source": "/api/quotation-items",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/quotation-items"
+    },
+    {
+      "source": "/api/reviews/:path*",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/reviews/:path*"
+    },
+    {
+      "source": "/api/reviews",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/reviews"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

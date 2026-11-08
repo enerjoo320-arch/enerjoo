@@ -1,0 +1,599 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url>
+    <loc>https://enerjoo.com/</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://enerjoo.com/brand-thumbnail.png</image:loc>
+      <image:title>Enerjoo | عالم الطاقة بين يديك</image:title>
+      <image:caption>منصة وبورصة الطاقة الشمسية في مصر</image:caption>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/products</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/exchange</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>hourly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/calculator</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/compare</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790087530612-MCLQP</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790087530856-b5aswi77.jpg</image:loc>
+      <image:title>إنفرتر هواوي 115 كيلو On-Grid ثلاثي الأطوار</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1791474437009-DC27W</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1791474437619-nrtfkfhx.jpg</image:loc>
+      <image:title>إنفرتر فيتشي هايبرد 8.2 كيلو وات ذكي</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1791474665420-D1JS4</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1791474666113-7obpghwu.jpg</image:loc>
+      <image:title>إنفرتر فيتشي هايبرد 6 كيلو وات منزلي</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1791474189629-69ANC</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1791474190279-jtwk2hja.jpg</image:loc>
+      <image:title>إنفرتر فيتشي هايبرد 10 كيلو وات 3 فاز</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1791793955228-T7V6R</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1791793955618-hnt8gcsl.jpg</image:loc>
+      <image:title>إنفرتر طلمبات ومضخات ري إنفت 7.5 كيلو (10 حصان)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1791028978968-FTIXC</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1791028978582-ye8lbh70.png</image:loc>
+      <image:title>لوح شمسي جينكو تايجر برو 725 وات N-Type</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790196906481-Y1ZLE</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790196901213-p07tdsed.png</image:loc>
+      <image:title>لوح شمسي جينكو تايجر برو 715 وات N-Type</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790196358858-3Y2LX</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790196353517-pb2u7mew.png</image:loc>
+      <image:title>لوح شمسي جينكو تايجر برو 710 وات N-Type</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790195768679-5D7YF</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790195763424-hpeyfwdr.png</image:loc>
+      <image:title>لوح شمسي جينكو تايجر برو 700 وات N-Type</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1791043106438-O02SR</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1791043105976-4eukpdun.png</image:loc>
+      <image:title>لوح لونجي ثنائي الوجه Hi-MO X10 بقدرة 640 وات</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1791474964787-SZ0TT</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1791474965434-xr788udb.jpg</image:loc>
+      <image:title>بطارية ديب سايكل جل فيتشي 200 أمبير 12 فولت</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-PUMP-SUB-7.5HP</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>طلمبة غاطسة آبار عميقة 7.5 حصان ستانلس ستيل</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-PUMP-SURF-5.5HP</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>مضخة سطحية طاردة مركزية 5.5 حصان للري</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-MOUNT-ALUM-ROOF</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1509391366360-2e959784a276?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>شاسيه ألومنيوم معتمد 6005-T5 للأسطح (4 ألواح)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-MOUNT-GROUND-FARM</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1508514177221-188b1cf16e9d?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>هيكل تثبيت أرضي حديد مجلفن على الساخن لمحطة 10 كيلو</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-CABLE-DC-6MM</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>لفة كابل طاقة شمسية DC نحاس 6 مم² معتمد TÜV (100 متر)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-CABLE-DC-4MM</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>لفة كابل طاقة شمسية DC نحاس 4 مم² معتمد TÜV (100 متر)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-PROT-DC-SPD-1000V</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>طقم حماية DC متكامل: قاطع 32A + مانع صواعق SPD 1000V</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-PROT-AC-3PH-DIST</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>لوحة قواطع وحماية AC ثلاثية الأطوار 63A مزودة بحماية تسريب</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-COMB-4IN-1OUT</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>صندوق تجميع 4 سلاسل شمسية IP65 مع فيوزات وقاطع عزل</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-MC4-1500V-PAIR</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>طقم موصلات MC4 أصلية 1500V IP68 مضادة للماء (10 أزواج)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-CLAMP-MID-END-SET</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1509391366360-2e959784a276?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>طقم كلبسات تثبيت ألومنيوم وسطية وطرفية مع مسامير ستانلس (20 قطعة)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-SEAL-EPDM-GASKET</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://images.unsplash.com/photo-1509391366360-2e959784a276?auto=format&amp;fit=crop&amp;w=800&amp;q=80</image:loc>
+      <image:title>طقم جوانات EPDM مانعة لتسرب المياه للأسطح المعدنية (50 قطعة)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790193989586-2U7VJ</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790193984026-qhh2ub71.png</image:loc>
+      <image:title>لوح طاقة شمسية جينكو 600 وات (Jinko Tiger NEO N-type Solar Panel TOPCON 600W)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1789980360131-0N06I</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1789980360694-9v1ur6lt.jpg</image:loc>
+      <image:title>إنفرتر هواوي 5 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-5KTL-M0)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790081990357-MVC2A</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790081990463-wbaeml7f.jpg</image:loc>
+      <image:title>إنفرتر هواوي 8 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-8KTL-M0)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790082337000-7MUN1</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790082337100-jybk8p5d.webp</image:loc>
+      <image:title>إنفرتر هواوي 10 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-10KTL-M0)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790083026718-9HZ4F</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790083026814-9m0je0lm.jpg</image:loc>
+      <image:title>إنفرتر هواوي 12 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-12KTL-M0)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790083206289-FR71J</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790083206385-0htzixb4.jpg</image:loc>
+      <image:title>إنفرتر هواوي 15 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-15KTL-M0)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790083340311-GQPGW</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790083340430-z44i6oys.jpg</image:loc>
+      <image:title>إنفرتر هواوي 17 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-17KTL-M0)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790083971956-CT2OB</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790083972092-ovk9sw3n.webp</image:loc>
+      <image:title>إنفرتر هواوي 20 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-20KTL-M0)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790085092319-L1PZO</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790085092513-y5ooa58y.jpg</image:loc>
+      <image:title>إنفرتر هواوي 25 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-25KTL-M5)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790085532809-LCN1Z</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790085533010-eppm6vjw.webp</image:loc>
+      <image:title>إنفرتر هواوي 30 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-30KTL-M3)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790085984450-JR42O</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790085984693-hnv82cyv.webp</image:loc>
+      <image:title>إنفرتر هواوي 36 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-36KTL-M3)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790086186504-9DSIG</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790086186721-qw1fx0mh.webp</image:loc>
+      <image:title>إنفرتر هواوي 40 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-40KTL-M3)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790086750544-LYU3C</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790086750773-p8x69vrr.jpg</image:loc>
+      <image:title>إنفرتر هواوي 60 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-60KTL-M0)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790087011731-I9Q2G</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790087011984-kcbywgul.jpg</image:loc>
+      <image:title>إنفرتر هواوي 70 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-70KTL-INM0)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790087344818-P6QHP</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790087345076-jncpnc9m.jpg</image:loc>
+      <image:title>إنفرتر هواوي 100 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-100KTL-M2)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790194607636-1YLL9</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790194602258-b6ojgsks.png</image:loc>
+      <image:title>لوح طاقة شمسية جينكو 620 وات (Jinko Tiger NEO N-type Solar Panel TOPCON 620W)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790195174332-O0VSN</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790195169086-ntyv9f9z.png</image:loc>
+      <image:title>لوح طاقة شمسية جينكو 615 وات (Jinko Tiger NEO N-type Solar Panel TOPCON 615W)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790194917164-S2YYU</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790194911860-5ra1kc1b.png</image:loc>
+      <image:title>لوح طاقة شمسية جينكو 625 وات (Jinko Tiger NEO N-type Solar Panel TOPCON 625W)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790194250722-VGPFG</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790194245374-kqqsgq94.png</image:loc>
+      <image:title>لوح طاقة شمسية جينكو 610 وات (Jinko Tiger NEO N-type Solar Panel TOPCON 610W)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790086478120-XPQMN</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790086478318-i1x74xbf.png</image:loc>
+      <image:title>إنفرتر هواوي 50 كيلو وات On-Grid ثلاثي الأطوار (SUN2000-50KTL-M3)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790285889545-PP4K1</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790285882740-sxyc0lig.png</image:loc>
+      <image:title>لوح طاقة شمسية لونجي ثنائي الوجه 610 وات (LONGi Hi-MO X7 610W N-Type Bifacial Solar Panel)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790286902592-PY8T7</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790286894241-onl8n9jd.jpg</image:loc>
+      <image:title>لوح طاقة شمسية لونجي ثنائي الوجه 620 وات (LONGi Hi-MO X7 620W N-Type Bifacial Solar Panel)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790287268194-1JR0P</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790287261297-v72zzvju.jpg</image:loc>
+      <image:title>لوح طاقة شمسية لونجي ثنائي الوجه 625 وات (LONGi Hi-MO X10 625W N-Type Bifacial Solar Panel)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790527173631-507KV</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790527174143-6acseon4.jpg</image:loc>
+      <image:title>إنفرتر فيليسيتي (فيلسيتي) أوف جريد 3 كيلو وات</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790527717972-GQ0U5</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790527718469-cz8sv0nk.png</image:loc>
+      <image:title>إنفرتر فيليسيتي (فيلسيتي) أوف جريد 5 كيلو وات</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790528077277-MORJL</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790528077718-x9gzusru.jpg</image:loc>
+      <image:title>إنفرتر فيليسيتي (فيلسيتي) أوف جريد 6 كيلو وات</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790528360810-MP1MO</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790528361351-3e8rrfxq.png</image:loc>
+      <image:title>إنفرتر فيليسيتي (فيلسيتي) أوف جريد 8 كيلو وات</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790528856737-PQO72</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790528857184-mdddo1xn.jpg</image:loc>
+      <image:title>إنفرتر فيليسيتي (فيلسيتي) أوف جريد 12 كيلو وات</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1791393558096-EVHQ8</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1791393557299-0534l3fw.jpg</image:loc>
+      <image:title>لوح طاقة شمسية ترينا سولار ثنائي الوجه 620 وات (Trina Vertex N 620W Bifacial Dual Glass)</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790928281074-9NQ3K</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790928281062-tdd41kjy.jpg</image:loc>
+      <image:title>إنفرتر إيستمان أوف جريد 5.5 كيلو وات</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790928620429-FH1TG</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790928620635-qvaj55tb.webp</image:loc>
+      <image:title>إنفرتر إيستمان أوف جريد 3.2 كيلو وات</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790929108980-NURY7</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790929109146-3wllmxiq.jpg</image:loc>
+      <image:title>إنفرتر إيستمان أوف جريد 11 كيلو وات</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://enerjoo.com/product/PROD-1790929456811-8N3AL</loc>
+    <lastmod>2026-10-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://enerjoo-api.enerjoo320.workers.dev/files/products/1790929457007-2l5l6j13.jpg</image:loc>
+      <image:title>إنفرتر إيستمان أوف جريد 6 كيلو وات</image:title>
+    </image:image>
+  </url>
+</urlset>

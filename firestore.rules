@@ -1,0 +1,218 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Secure authentication & authorization helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return request.auth != null && (
+        (request.auth.token.keys().contains('email') &&
+          request.auth.token.email.matches('(?i)^enerjoo(365|320)@gmail\\.com$')) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.type == 'admin')
+      );
+    }
+
+    function isSupplier() {
+      return request.auth != null && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.type == 'supplier' &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('verified', false) == true &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('rejected', false) != true)
+      );
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // 1. PRODUCTS COLLECTION SECURITY
+    match /products/{productId} {
+      // Public catalog read access
+      allow read, list: if true;
+
+      // Only authenticated approved suppliers and admins can create products with valid payload
+      allow create: if isSignedIn() && (isSupplier() || isAdmin())
+        && incoming().name is string 
+        && incoming().name.size() > 0 
+        && incoming().name.size() <= 200;
+
+      // Only approved product owner or admin can update
+      allow update: if isSignedIn() && (
+        isAdmin() || 
+        (isSupplier() && (
+          (resource.data.keys().contains('supplierId') && resource.data.supplierId == request.auth.uid) ||
+          (resource.data.keys().contains('userId') && resource.data.userId == request.auth.uid)
+        ))
+      );
+
+      // Only approved product owner or admin can delete
+      allow delete: if isSignedIn() && (
+        isAdmin() || 
+        (isSupplier() && (
+          (resource.data.keys().contains('supplierId') && resource.data.supplierId == request.auth.uid) ||
+          (resource.data.keys().contains('userId') && resource.data.userId == request.auth.uid)
+        ))
+      );
+
+      // REVIEWS SUBCOLLECTION SECURITY
+      match /reviews/{reviewId} {
+        // Anyone can read product reviews
+        allow read, list: if true;
+
+        // Authenticated users can create reviews under their own identity
+        allow create: if isSignedIn()
+          && isValidId(productId)
+          && isValidId(reviewId)
+          && incoming().userId == request.auth.uid
+          && incoming().userName is string
+          && incoming().userName.size() > 0
+          && incoming().userName.size() <= 100
+          && incoming().rating is number
+          && incoming().rating >= 1
+          && incoming().rating <= 5
+          && incoming().comment is string
+          && incoming().comment.size() <= 1000;
+
+        allow update: if isSignedIn()
+          && isValidId(productId)
+          && isValidId(reviewId)
+          && (resource.data.userId == request.auth.uid || isAdmin())
+          && incoming().userId == resource.data.userId
+          && incoming().rating is number
+          && incoming().rating >= 1
+          && incoming().rating <= 5
+          && incoming().comment is string
+          && incoming().comment.size() <= 1000;
+
+        allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // 2. USERS COLLECTION SECURITY
+    match /users/{userId} {
+      // Public read access for supplier directory, profiles, ratings
+      allow read, list: if true;
+
+      // Users can create their own document (as customer or unverified supplier) or admins can create
+      allow create: if isSignedIn() && (
+        isAdmin() || (
+          request.auth.uid == userId &&
+          (!incoming().keys().contains('type') || incoming().type in ['customer', 'supplier']) &&
+          (incoming().type != 'supplier' || (
+            incoming().get('verified', false) == false &&
+            incoming().get('rejected', false) == false
+          ))
+        )
+      );
+
+      // Users can update their own profile, but cannot modify type, verified, or rejected; only admins can modify supplier status
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (request.auth.uid == userId &&
+          resource.data.type == incoming().type &&
+          resource.data.get('verified', false) == incoming().get('verified', false) &&
+          resource.data.get('rejected', false) == incoming().get('rejected', false))
+      );
+      
+      // Only admins can delete user documents (prevents deleteDoc + setDoc role escalation)
+      allow delete: if isSignedIn() && isAdmin();
+    }
+
+    // 3. QUOTATIONS COLLECTION SECURITY (AI Sizing Leads & Quotations)
+    match /quotations/{quotationId} {
+      // Guests or users can submit quotation requests with strict field validation
+      allow create: if ((incoming().keys().contains('customerName') && incoming().customerName is string && incoming().customerName.size() >= 2 && incoming().customerName.size() <= 150) ||
+                        (incoming().keys().contains('name') && incoming().name is string && incoming().name.size() >= 2 && incoming().name.size() <= 150))
+        && incoming().phone is string
+        && incoming().phone.size() >= 7
+        && incoming().phone.size() <= 30;
+
+      // Leads cannot be read by anonymous scrapers; must be signed in (suppliers/admins)
+      allow read, list: if isSignedIn();
+
+      // Only admins or the relevant requester/supplier can update or delete
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.keys().contains('userId') && resource.data.userId == request.auth.uid) ||
+        (resource.data.keys().contains('customerId') && resource.data.customerId == request.auth.uid) ||
+        (resource.data.keys().contains('supplierId') && resource.data.supplierId == request.auth.uid)
+      );
+
+      allow delete: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.keys().contains('userId') && resource.data.userId == request.auth.uid) ||
+        (resource.data.keys().contains('customerId') && resource.data.customerId == request.auth.uid)
+      );
+    }
+
+    // 4. SOLAR REQUESTS COLLECTION SECURITY (Customer Solar Calculations & Requests)
+    match /solarRequests/{requestId} {
+      // Valid request creation by customer or guest
+      allow create: if incoming().customerName is string 
+        && incoming().customerName.size() >= 2 
+        && incoming().customerName.size() <= 150
+        && incoming().customerPhone is string
+        && incoming().customerPhone.size() >= 7
+        && incoming().customerPhone.size() <= 30
+        && incoming().systemType in ['on-grid', 'off-grid', 'hybrid', 'pump']
+        && incoming().tier in ['budget', 'recommended', 'premium'];
+
+      // Reading requests restricted to signed-in users (suppliers/admins/owners)
+      allow read, list: if isSignedIn();
+      
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.keys().contains('customerId') && resource.data.customerId == request.auth.uid) ||
+        (resource.data.keys().contains('userId') && resource.data.userId == request.auth.uid)
+      );
+      
+      allow delete: if isSignedIn() && (
+        isAdmin() ||
+        (resource.data.keys().contains('customerId') && resource.data.customerId == request.auth.uid) ||
+        (resource.data.keys().contains('userId') && resource.data.userId == request.auth.uid)
+      );
+    }
+
+    // 5. CUSTOMERS COLLECTION SECURITY (Phone Auth Customers)
+    match /customers/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+
+      allow create: if isSignedIn() &&
+        request.auth.uid == userId &&
+        incoming().uid == userId;
+
+      allow update: if isSignedIn() &&
+        request.auth.uid == userId &&
+        incoming().uid == resource.data.uid;
+
+      allow delete: if isAdmin();
+    }
+
+    // 6. ENERGY EXCHANGE (بورصة الطاقة) COLLECTION
+    match /energyExchange/{docId} {
+      // Anyone can view the current exchange prices
+      allow read, list: if true;
+
+      // ONLY authorized administrators can modify Energy Exchange prices
+      allow write: if isAdmin();
+    }
+  }
+}

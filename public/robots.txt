@@ -1,0 +1,41 @@
+# Robots.txt for Enerjoo (https://enerjoo.com)
+# Sitemaps
+Sitemap: https://enerjoo.com/sitemap.xml
+
+# Specific rules for OpenAI SearchBot (ChatGPT Search & AI Citations)
+User-agent: OAI-SearchBot
+Allow: /
+Allow: /products
+Allow: /product/
+Allow: /compare
+Allow: /calculator
+Allow: /exchange
+Disallow: /admin
+Disallow: /admin-suppliers
+Disallow: /admin-requests
+Disallow: /supplier-dashboard
+Disallow: /customer-requests
+Disallow: /profile
+Disallow: /login
+Disallow: /register
+Disallow: /add
+Disallow: /api/
+
+# General search engines (Googlebot, Bingbot, etc.)
+User-agent: *
+Allow: /
+Allow: /products
+Allow: /product/
+Allow: /compare
+Allow: /calculator
+Allow: /exchange
+Disallow: /admin
+Disallow: /admin-suppliers
+Disallow: /admin-requests
+Disallow: /supplier-dashboard
+Disallow: /customer-requests
+Disallow: /profile
+Disallow: /login
+Disallow: /register
+Disallow: /add
+Disallow: /api/
