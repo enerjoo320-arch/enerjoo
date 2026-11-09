@@ -1,18 +1,14 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   TrendingUp,
-  TrendingDown,
   Edit2,
   Check,
   X,
   ShieldCheck,
-  Zap,
   RefreshCw,
   Calculator,
   Search,
   ArrowUpDown,
-  LayoutGrid,
-  List,
   Info,
   ExternalLink,
   HelpCircle,
@@ -20,6 +16,8 @@ import {
   Trash2,
   AlertTriangle,
   Lock,
+  Sparkles,
+  Award,
 } from 'lucide-react';
 import { SOLAR_PANEL_BRANDS, SolarPanelBrand, User } from '../types';
 import {
@@ -28,9 +26,7 @@ import {
   addSolarPanelBrandRange,
   updateSolarPanelBrandRange,
   deleteSolarPanelBrandRange,
-  updateSolarPanelBrandPrice,
   subscribeToEnergyExchange,
-  DEFAULT_SOLAR_PANEL_PRICES
 } from '../services/energyExchangeService';
 
 interface EnergyExchangeProps {
@@ -46,6 +42,7 @@ interface BrandMeta {
   tier: string;
   country: string;
   highlight: string;
+  features: string[];
 }
 
 const BRAND_METADATA: Record<SolarPanelBrand, BrandMeta> = {
@@ -54,82 +51,167 @@ const BRAND_METADATA: Record<SolarPanelBrand, BrandMeta> = {
     tier: 'Tier 1 Global',
     country: 'الصين',
     highlight: 'الأكثر انتشاراً في المشروعات المصرية وخلايا Tiger Neo النصفية',
+    features: [
+      'تصنيف عالمي بلومبيرغ Tier 1 ومطابقة لأعلى معايير الجودة المعتمدة دولياً',
+      'الحصة السوقية الأكبر وانتشار واسع في المشروعات القومية والتجارية في السوق المصري',
+      'ريادة تقنية خلايا Tiger Neo النصفية N-Type بكفاءة تحويل فائقة ومعامل تدهور سنوي منخفض',
+      'ضمان مصنعي معتمد واستقرار عالي في توليد الطاقة تحت درجات الحرارة المرتفعة'
+    ],
   },
   'LONGi Solar': {
     arName: 'لونجي سولار',
     tier: 'Tier 1 Global',
     country: 'الصين',
     highlight: 'رائدة تقنية Hi-MO وتحمل استثنائي لدرجات الحرارة المرتفعة',
+    features: [
+      'الشركة الرائدة عالمياً في تطوير وتصنيع رقائق السيليكون أحادي البلورة (Monocrystalline)',
+      'سلسلة Hi-MO بمعامل حراري منخفض وتحمل فائق لأجواء الصيف والمناخ الصحراوي',
+      'تصنيف عالمي Tier 1 مع التزام صارم بمعايير الاستدامة وكفاءة الخلايا',
+      'توافق قياسي مع مختلف المحولات ومنظومات الطاقة الشمسية المتصلة والمستقلة عن الشبكة'
+    ],
   },
   'AIKO': {
     arName: 'إيكو سولار',
     tier: 'Tier 1 Premium',
     country: 'الصين',
     highlight: 'أعلى كفاءة خلايا تجارية في العالم بتقنية All-Back-Contact (ABC)',
+    features: [
+      'حائزة على أعلى كفاءة خلايا تجارية في العالم بتقنية التلامس الخلفي الكامل All-Back-Contact (ABC)',
+      'خلو واجهة الخلايا تماماً من خطوط التوصيل الفضية، مما يمنح مظهراً جمالياً وتوليداً أقصى للضوء',
+      'تصنيف Tier 1 Premium مع ضمانات أداء ممتدة ومقاومة استثنائية للتظليل الجزئي',
+      'معامل حراري فائق يضمن استقرار الإنتاجية في ذروة فصل الصيف'
+    ],
   },
   'Trina Solar': {
     arName: 'ترينا سولار',
     tier: 'Tier 1 Global',
     country: 'الصين',
     highlight: 'سلسلة Vertex بقدرات فائقة وتوليد وجهين للمزارع والمحطات',
+    features: [
+      'سلسلة Vertex المتطورة بخلايا 210 مم فائقة القدرة وتصميم ثنائي الوجهين (Bifacial)',
+      'خبرة عالمية تفوق ربع قرن في محطات الطاقة الكبرى والمزارع الاستثمارية',
+      'تصنيف Tier 1 Global مع اختبارات موثوقية دورية معتمدة من كبرى المعامل الدولية (PVEL / DNV GL)',
+      'تحمل ميكانيكي عالي للأحمال ومقاومة متقدمة للظروف الجوية القاسية والرطوبة'
+    ],
   },
   'JA Solar': {
     arName: 'جي إيه سولار',
     tier: 'Tier 1 Global',
     country: 'الصين',
     highlight: 'أداء عالي في الإشعاع المنخفض ومقاومة متفوقة للتدهور الضوئي PID',
+    features: [
+      'سلاسل إنتاج متكاملة تضمن أعلى درجات مراقبة الجودة من بلورات السيليكون حتى اللوح النهائي',
+      'أداء ممتاز في ظروف الإشعاع الشمسي المنخفض وساعات الصباح الباكر والغروب',
+      'مقاومة فائقة لظاهرة التدهور الضوئي المستحث (Anti-PID) ومقاومة تآكل الأملاح والأمونيا',
+      'تصنيف موثوق Tier 1 Global معتمد لدى كبرى البنوك والمؤسسات التمويلية الدولية'
+    ],
   },
   'Risen': {
     arName: 'رايزن إنرجي',
     tier: 'Tier 1 Global',
     country: 'الصين',
     highlight: 'تقنية Heterojunction (HJT) ومعامل حراري متفوق في الصيف',
+    features: [
+      'ريادة تقنية الوصلات غير المتجانسة Heterojunction (HJT) فائقة الكفاءة',
+      'أقل معامل حراري لفقدان الطاقة أثناء ارتفاع درجات حرارة الصيف الشديدة',
+      'تصنيف عالمي Tier 1 مع اعتماد دولي لاختبارات الجودة والسلامة الشاملة',
+      'تصميم متين يقلل من تشققات الخلايا الدقيقة Micro-cracks ويزيد العمر التشغيلي'
+    ],
   },
   'GCL': {
     arName: 'جي سي إل',
     tier: 'Tier 1 Global',
     country: 'الصين',
     highlight: 'سلاسل تصنيع متكاملة من بلورات السيليكون النقي للألواح',
+    features: [
+      'أكبر منتج ومطور لمادة البولي سيليكون النقي وسلاسل القيمة الشمسية عالمياً',
+      'تصنيف Tier 1 مع كفاءة تحويل مستقرة وجودة تصنيع مؤكدة بشهادات دولية',
+      'حلول متكاملة ملائمة للمحطات الكبيرة والمنظومات الصناعية والتجارية',
+      'حماية موثوقة ضد التآكل والأحمال البيئية المختلفة'
+    ],
   },
   'Suntech': {
     arName: 'صنتك باور',
     tier: 'Tier 1 Standard',
     country: 'الصين',
     highlight: 'خبرة عريقة في محطات الطاقة الكبرى والمشروعات الصناعية',
+    features: [
+      'من أعرق الماركات الرائدة في صناعة الطاقة الشمسية بخبرة تاريخية تتجاوز 20 عاماً',
+      'تصنيف معتمد واختبارات جودة صارمة تضمن استمرارية التوليد وكفاءة استثمار طويلة الأجل',
+      'أداء تشغيلي مستقر وموثوق في المشروعات الصناعية والزراعية',
+      'ضمان إنتاجية وأداء موثق بشهادات الفحص العالمية'
+    ],
   },
   'Astronergy': {
     arName: 'أسترونيرجي',
     tier: 'Tier 1 Global',
     country: 'الصين',
     highlight: 'سلسلة Astro N5 عالية الموثوقية بضمان جودة وأداء ممتد',
+    features: [
+      'إحدى شركات مجموعة CHINT العالمية الرائدة في معدات وحلول الكهرباء والطاقة',
+      'سلسلة Astro عالية الموثوقية بتقنية TOPCon مع تصنيف عالمي Tier 1 مستمر',
+      'سجل أداء خالٍ من العيوب وحائزة على تصنيف Top Performer في اختبارات PVEL المتتالية',
+      'توافق مثالي مع الشبكات الكهربائية وأنظمة الحماية المعتمدة'
+    ],
   },
   'Gokin': {
     arName: 'جوكين سولار',
     tier: 'Tier 1 Certified',
     country: 'الصين',
     highlight: 'خلايا سيليكون متطورة مع حلول اقتصادية متوازنة في التكلفة',
+    features: [
+      'تخصص رائد في تصنيع رقائق السيليكون الكبيرة عالية الكفاءة للمحطات الحديثة',
+      'توازن استثنائي بين التكلفة الاقتصادية التنافسية وكفاءة التوليد العالية',
+      'مطابقة كاملة لشهادات الجودة والمعايير القياسية الدولية (IEC, CE, TUV)',
+      'استقرار توليد ملائم للبيئات والمناخات الحارة'
+    ],
   },
   'Quantum Solar': {
     arName: 'كوانتوم سولار',
     tier: 'Certified Standard',
     country: 'عالمي',
     highlight: 'خيار اقتصادي عملي للمزارع والمنظومات المنزلية المستقلة',
+    features: [
+      'خيار اقتصادي عملي عالي الجدوى لمنظومات الري الزراعي والمحطات المستقلة عن الشبكة',
+      'تصميم هندسي متين يلائم البيئات الميدانية ومقاومة تراكم الأتربة والغبار',
+      'شهادات فحص ومطابقة للمواصفات الفنية المعتمدة للمشروعات الصغيرة والمتوسطة',
+      'تكلفة تنافسية تضمن سرعة استرداد رأس المال المستثمر'
+    ],
   },
   'Ulica Solar': {
     arName: 'يوليكا سولار',
     tier: 'Tier 1 Certified',
     country: 'الصين',
     highlight: 'كفاءة تشغيل مستقرة وشهادات جودة واختبارات دولية معتمدة',
+    features: [
+      'شركة تابعة لمجموعة Shanshan الاستثمارية العالمية ومصنفة Tier 1 من بلومبيرغ',
+      'أداء تشغيلي مستقر واختبارات صارمة لمقاومة الرطوبة والتغيرات المناخية المفاجئة',
+      'ضمان استقرار الطاقة المولدة على المدى الطويل مع معاملات تدهور منخفضة',
+      'شهادات اعتماد أوروبية ودولية متعددة (TUV, CE, IEC)'
+    ],
   },
   'ZNShine Solar': {
     arName: 'زد إن شاين سولار',
     tier: 'Tier 1 Global',
     country: 'الصين',
     highlight: 'تقنية طلاء الجرافين ذاتية التنظيف لمقاومة تراكم الغبار',
+    features: [
+      'ابتكار عالمي رائد في استخدام تقنية طلاء الجرافين ذاتي التنظيف (Self-Cleaning Graphene)',
+      'تقليل تكاليف الصيانة الدورية والغسيل بفضل منع تراكم الأتربة والغبار الصحراوي بنسبة كبيرة',
+      'تصنيف عالمي Tier 1 Global مستمر لدى بلومبيرغ BNEF',
+      'كفاءة تحويل ممتازة ومقاومة فائقة للخدوش والعوامل الجوية الشديدة'
+    ],
   },
 };
 
 const COMMON_WATTAGES = [550, 585, 600, 650, 725];
+
+interface EditableRangeItem {
+  priceId?: string;
+  minWattage: string;
+  maxWattage: string;
+  pricePerWatt: string;
+}
 
 export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
   lang,
@@ -145,7 +227,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
   const [livePrices, setLivePrices] = useState<Record<string, number>>(initialPrices);
   const [liveRecords, setLiveRecords] = useState<EnergyExchangeRecord[]>(initialRecords);
 
-  // Subscribe to real-time sync
+  // Subscribe to real-time sync from Cloudflare D1
   useEffect(() => {
     const unsubscribe = subscribeToEnergyExchange((updatedPrices, updatedRecords) => {
       setLivePrices(updatedPrices);
@@ -156,30 +238,30 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
     return () => unsubscribe();
   }, []);
 
-  // Filters, search, and view mode
+  // Filters and search
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<'default' | 'price-asc' | 'price-desc' | 'name'>('default');
-  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
 
-  // Interactive Calculator State
+  // Interactive Quick Calculator State
   const [calcBrand, setCalcBrand] = useState<SolarPanelBrand>('Jinko');
   const [calcWattage, setCalcWattage] = useState<number>(585);
   const [customWattageInput, setCustomWattageInput] = useState<string>('585');
 
-  // Admin Modal / Range Editing State
-  const [showRangeModal, setShowRangeModal] = useState(false);
-  const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
-  const [editingPriceId, setEditingPriceId] = useState<string | null>(null);
-  const [modalBrand, setModalBrand] = useState<SolarPanelBrand>('Jinko');
-  const [modalMinWatt, setModalMinWatt] = useState<string>('500');
-  const [modalMaxWatt, setModalMaxWatt] = useState<string>('600');
-  const [modalPricePerWatt, setModalPricePerWatt] = useState<string>('12.00');
-  
-  const [isSaving, setIsSaving] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  // Brand Features Modal State (for all roles)
+  const [selectedFeaturesBrand, setSelectedFeaturesBrand] = useState<SolarPanelBrand | null>(null);
 
-  // Calculated Output for Calculator
+  // Admin Manage Ranges Modal State (Admin Only)
+  const [editingBrandForAdmin, setEditingBrandForAdmin] = useState<SolarPanelBrand | null>(null);
+  const [adminRanges, setAdminRanges] = useState<EditableRangeItem[]>([]);
+  const [originalAdminRangeIds, setOriginalAdminRangeIds] = useState<string[]>([]);
+  const [adminModalError, setAdminModalError] = useState<string | null>(null);
+  const [isAdminSaving, setIsAdminSaving] = useState(false);
+
+  // Global Toast Messages
+  const [globalErrorMsg, setGlobalErrorMsg] = useState<string | null>(null);
+  const [globalSuccessMsg, setGlobalSuccessMsg] = useState<string | null>(null);
+
+  // Calculator Result
   const calcMatch = useMemo(() => {
     return findMatchingBrandPricePerWatt(liveRecords, calcBrand, undefined, calcWattage);
   }, [liveRecords, calcBrand, calcWattage]);
@@ -194,7 +276,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
 
     liveRecords.forEach(r => {
       if (r.brand) {
-        // match brand
         const b = r.brand;
         const matched = SOLAR_PANEL_BRANDS.find(sb => sb.toLowerCase() === b.toLowerCase()) || b;
         if (!map[matched]) map[matched] = [];
@@ -208,7 +289,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
   const marketMetrics = useMemo(() => {
     const priceList = SOLAR_PANEL_BRANDS.map(brand => livePrices[brand] ?? 12.00);
     const avg = priceList.reduce((acc, curr) => acc + curr, 0) / (priceList.length || 1);
-    
+
     let minBrand: SolarPanelBrand = SOLAR_PANEL_BRANDS[0];
     let maxBrand: SolarPanelBrand = SOLAR_PANEL_BRANDS[0];
     let minPrice = Infinity;
@@ -262,91 +343,190 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
     return list;
   }, [searchTerm, sortBy, livePrices]);
 
-  // Handlers for Admin Range Operations
-  const handleOpenAddModal = (brand?: SolarPanelBrand) => {
-    setModalMode('add');
-    setEditingPriceId(null);
-    setModalBrand(brand || 'Jinko');
-    setModalMinWatt('500');
-    setModalMaxWatt('600');
-    setModalPricePerWatt((livePrices[brand || 'Jinko'] ?? 12.00).toFixed(2));
-    setErrorMsg(null);
-    setShowRangeModal(true);
+  // Handlers for Features Modal (All Users)
+  const handleOpenFeatures = (brand: SolarPanelBrand) => {
+    setSelectedFeaturesBrand(brand);
   };
 
-  const handleOpenEditModal = (rec: EnergyExchangeRecord) => {
-    setModalMode('edit');
-    setEditingPriceId(rec.price_id);
-    setModalBrand((rec.brand as SolarPanelBrand) || 'Jinko');
-    setModalMinWatt(String(rec.min_wattage ?? 500));
-    setModalMaxWatt(String(rec.max_wattage ?? 600));
-    setModalPricePerWatt(rec.price_per_watt.toFixed(2));
-    setErrorMsg(null);
-    setShowRangeModal(true);
+  const handleCloseFeatures = () => {
+    setSelectedFeaturesBrand(null);
   };
 
-  const handleSaveRange = async () => {
-    const minW = parseInt(modalMinWatt, 10);
-    const maxW = parseInt(modalMaxWatt, 10);
-    const pPerW = parseFloat(modalPricePerWatt);
+  // Handlers for Admin Range Management Modal
+  const handleOpenAdminEdit = (brand: SolarPanelBrand) => {
+    const existing = (recordsByBrand[brand] || [])
+      .filter(r => r.min_wattage != null && r.max_wattage != null)
+      .sort((a, b) => (a.min_wattage ?? 0) - (b.min_wattage ?? 0));
 
-    if (isNaN(minW) || minW <= 0) {
-      setErrorMsg(isAr ? 'الحد الأدنى للقدرة يجب أن يكون رقماً صحيحاً أكبر من 0' : 'Min wattage must be > 0');
+    if (existing.length > 0) {
+      setAdminRanges(existing.map(r => ({
+        priceId: r.price_id,
+        minWattage: String(r.min_wattage),
+        maxWattage: String(r.max_wattage),
+        pricePerWatt: r.price_per_watt.toFixed(2)
+      })));
+      setOriginalAdminRangeIds(existing.map(r => r.price_id));
+    } else {
+      // Initialize with 1 default range using current flat price
+      const curPrice = (livePrices[brand] ?? 12.00).toFixed(2);
+      setAdminRanges([
+        {
+          priceId: undefined,
+          minWattage: '550',
+          maxWattage: '600',
+          pricePerWatt: curPrice
+        }
+      ]);
+      setOriginalAdminRangeIds([]);
+    }
+
+    setEditingBrandForAdmin(brand);
+    setAdminModalError(null);
+  };
+
+  const handleCloseAdminEdit = () => {
+    if (isAdminSaving) return;
+    setEditingBrandForAdmin(null);
+    setAdminRanges([]);
+    setOriginalAdminRangeIds([]);
+    setAdminModalError(null);
+  };
+
+  const handleUpdateAdminRangeField = (index: number, field: keyof EditableRangeItem, value: string) => {
+    setAdminRanges(prev => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], [field]: value };
+      return copy;
+    });
+  };
+
+  const handleAddNextRange = () => {
+    if (adminRanges.length >= 3) return; // Strictly max 3 ranges
+    const last = adminRanges[adminRanges.length - 1];
+    let nextMin = 601;
+    let nextMax = 650;
+    let nextPrice = '12.00';
+
+    if (last) {
+      const lastMax = parseInt(last.maxWattage, 10);
+      if (!isNaN(lastMax) && lastMax > 0) {
+        nextMin = lastMax + 1;
+        nextMax = nextMin + 50;
+      }
+      if (last.pricePerWatt) {
+        nextPrice = last.pricePerWatt;
+      }
+    }
+
+    setAdminRanges(prev => [
+      ...prev,
+      {
+        priceId: undefined,
+        minWattage: String(nextMin),
+        maxWattage: String(nextMax),
+        pricePerWatt: nextPrice
+      }
+    ]);
+  };
+
+  const handleRemoveRange = (index: number) => {
+    if (index === 0) return; // Range 1 is mandatory and cannot be removed
+    setAdminRanges(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSaveAdminRanges = async () => {
+    if (!editingBrandForAdmin) return;
+    setAdminModalError(null);
+
+    // Rule 1: Min 1, Max 3 ranges
+    if (adminRanges.length < 1) {
+      setAdminModalError('يجب أن يحتوي البرند على نطاق قدرة واحد على الأقل.');
       return;
     }
-    if (isNaN(maxW) || maxW < minW) {
-      setErrorMsg(isAr ? 'الحد الأقصى للقدرة يجب أن يكون أكبر من أو يساوي الحد الأدنى' : 'Max wattage must be >= min wattage');
-      return;
-    }
-    if (isNaN(pPerW) || pPerW <= 0 || pPerW > 200) {
-      setErrorMsg(isAr ? 'سعر الوات يجب أن يكون رقماً صحيحاً أكبر من 0 وأقل من 200 ج.م' : 'Price per watt must be > 0 and <= 200');
+    if (adminRanges.length > 3) {
+      setAdminModalError('الحد الأقصى للنطاقات هو 3 نطاقات لكل علامة تجارية.');
       return;
     }
 
-    try {
-      setIsSaving(true);
-      setErrorMsg(null);
+    const parsedRanges: { priceId?: string; minW: number; maxW: number; price: number }[] = [];
 
-      if (modalMode === 'add') {
-        await addSolarPanelBrandRange(modalBrand, minW, maxW, pPerW);
-        setSuccessMsg(isAr ? `تمت إضافة نطاق قدرة جديد لـ ${modalBrand} بنجاح` : `Added wattage range for ${modalBrand}`);
-      } else if (modalMode === 'edit' && editingPriceId) {
-        await updateSolarPanelBrandRange(editingPriceId, modalBrand, minW, maxW, pPerW);
-        setSuccessMsg(isAr ? `تم تحديث نطاق القدرة بنجاح` : `Updated wattage range`);
+    // Rule 2: Completeness, positive numbers, and min < max
+    for (let i = 0; i < adminRanges.length; i++) {
+      const item = adminRanges[i];
+      const minW = parseInt(item.minWattage.trim(), 10);
+      const maxW = parseInt(item.maxWattage.trim(), 10);
+      const price = parseFloat(item.pricePerWatt.trim());
+
+      if (isNaN(minW) || minW <= 0) {
+        setAdminModalError(`النطاق ${i + 1}: الحد الأدنى للقدرة غير صالح. يجب أن يكون رقماً موجباً أكبر من 0.`);
+        return;
+      }
+      if (isNaN(maxW) || maxW <= 0) {
+        setAdminModalError(`النطاق ${i + 1}: الحد الأقصى للقدرة غير صالح. يجب أن يكون رقماً موجباً أكبر من 0.`);
+        return;
+      }
+      if (minW >= maxW) {
+        setAdminModalError(`النطاق ${i + 1}: الحد الأدنى (${minW} وات) يجب أن يكون أقل من الحد الأقصى (${maxW} وات).`);
+        return;
+      }
+      if (isNaN(price) || price <= 0 || price > 200) {
+        setAdminModalError(`النطاق ${i + 1}: سعر الوات (${item.pricePerWatt}) غير صالح. يجب أن يكون رقماً بين 0.1 و 200 ج.م.`);
+        return;
       }
 
-      setShowRangeModal(false);
-      setTimeout(() => setSuccessMsg(null), 4000);
-    } catch (err: any) {
-      setErrorMsg(err?.message || (isAr ? 'فشل حفظ نطاق القدرة' : 'Failed to save range'));
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDeleteRange = async (priceId: string, brandName: string) => {
-    if (!window.confirm(isAr ? `هل أنت تأكد من رغبتك في حذف هذا النطاق لـ ${brandName}؟` : `Delete wattage range for ${brandName}?`)) {
-      return;
+      parsedRanges.push({ priceId: item.priceId, minW, maxW, price });
     }
 
+    // Rule 3: Prevent overlapping ranges for the same brand
+    for (let i = 0; i < parsedRanges.length; i++) {
+      for (let j = i + 1; j < parsedRanges.length; j++) {
+        const r1 = parsedRanges[i];
+        const r2 = parsedRanges[j];
+        const isOverlap = r1.minW <= r2.maxW && r1.maxW >= r2.minW;
+        if (isOverlap) {
+          setAdminModalError(
+            `تداخل في نطاقات القدرة: النطاق ${i + 1} (${r1.minW}–${r1.maxW} وات) يتداخل مع النطاق ${j + 1} (${r2.minW}–${r2.maxW} وات). يرجى تعديل الحدود لتكون النطاقات منفصلة تماماً.`
+          );
+          return;
+        }
+      }
+    }
+
+    // Rule 4: Atomic Execution
     try {
-      setIsSaving(true);
-      setErrorMsg(null);
-      await deleteSolarPanelBrandRange(priceId);
-      setSuccessMsg(isAr ? 'تم حذف النطاق بنجاح' : 'Range deleted successfully');
-      setTimeout(() => setSuccessMsg(null), 4000);
+      setIsAdminSaving(true);
+
+      // A. Delete ranges that were removed in the dialog
+      const activePriceIds = parsedRanges.map(r => r.priceId).filter(Boolean) as string[];
+      const toDelete = originalAdminRangeIds.filter(id => !activePriceIds.includes(id));
+      for (const delId of toDelete) {
+        await deleteSolarPanelBrandRange(delId);
+      }
+
+      // B. Update existing ranges or insert new ones
+      for (const r of parsedRanges) {
+        if (r.priceId) {
+          await updateSolarPanelBrandRange(r.priceId, editingBrandForAdmin, r.minW, r.maxW, r.price);
+        } else {
+          await addSolarPanelBrandRange(editingBrandForAdmin, r.minW, r.maxW, r.price);
+        }
+      }
+
+      const savedBrand = editingBrandForAdmin;
+      setEditingBrandForAdmin(null);
+      setGlobalSuccessMsg(`تم حفظ نطاقات وأسعار علامة ${savedBrand} بنجاح`);
+      setTimeout(() => setGlobalSuccessMsg(null), 4000);
     } catch (err: any) {
-      setErrorMsg(err?.message || (isAr ? 'فشل حذف النطاق' : 'Failed to delete range'));
+      setAdminModalError(err?.message || 'حدث خطأ أثناء حفظ النطاقات في قاعدة البيانات');
     } finally {
-      setIsSaving(false);
+      setIsAdminSaving(false);
     }
   };
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 font-sans">
+    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-8 font-sans" dir="rtl">
       {/* 1. Header Hero Banner */}
       <div className="relative overflow-hidden bg-slate-900 text-white rounded-3xl p-6 sm:p-10 mb-8 border border-slate-800 shadow-xl">
-        {/* Decorative background blur */}
         <div className="absolute top-0 right-0 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
         <div className="absolute bottom-0 left-0 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none -ml-20 -mb-20" />
 
@@ -388,7 +568,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
 
         {/* 2. Key Market Metrics Grid */}
         <div className="mt-8 pt-6 border-t border-slate-800/80 grid grid-cols-2 md:grid-cols-4 gap-4">
-          {/* Avg Price */}
           <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-4">
             <span className="text-xs text-slate-400 font-medium block mb-1">
               {isAr ? 'متوسط سعر الوات اليوم' : 'Average Watt Price'}
@@ -404,7 +583,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
             </span>
           </div>
 
-          {/* Min Price */}
           <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-4">
             <span className="text-xs text-emerald-400 font-medium block mb-1">
               {isAr ? 'أقل سعر وات (الأكثر توفيراً)' : 'Lowest Watt Price'}
@@ -420,7 +598,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
             </span>
           </div>
 
-          {/* Max Price */}
           <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-4">
             <span className="text-xs text-amber-400 font-medium block mb-1">
               {isAr ? 'أعلى سعر وات (الفئة العليا)' : 'Top Tier Watt Price'}
@@ -436,7 +613,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
             </span>
           </div>
 
-          {/* Certified Brands */}
           <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-4">
             <span className="text-xs text-slate-400 font-medium block mb-1">
               {isAr ? 'الماركات العالمية المعتمدة' : 'Certified Brands'}
@@ -454,26 +630,26 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
         </div>
       </div>
 
-      {/* Global Status Alerts */}
-      {errorMsg && (
+      {/* Global Alerts */}
+      {globalErrorMsg && (
         <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 text-sm rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
           <div className="flex items-center gap-2">
             <AlertTriangle size={18} className="text-red-600 shrink-0" />
-            <span className="font-semibold">{errorMsg}</span>
+            <span className="font-semibold">{globalErrorMsg}</span>
           </div>
-          <button onClick={() => setErrorMsg(null)} className="text-red-500 hover:text-red-700 p-1 rounded-lg">
+          <button onClick={() => setGlobalErrorMsg(null)} className="text-red-500 hover:text-red-700 p-1 rounded-lg">
             <X size={16} />
           </button>
         </div>
       )}
 
-      {successMsg && (
+      {globalSuccessMsg && (
         <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-2xl flex items-center justify-between shadow-sm animate-fade-in">
           <div className="flex items-center gap-2">
             <Check size={18} className="text-emerald-600 shrink-0" />
-            <span className="font-semibold">{successMsg}</span>
+            <span className="font-semibold">{globalSuccessMsg}</span>
           </div>
-          <button onClick={() => setSuccessMsg(null)} className="text-emerald-500 hover:text-emerald-700 p-1 rounded-lg">
+          <button onClick={() => setGlobalSuccessMsg(null)} className="text-emerald-500 hover:text-emerald-700 p-1 rounded-lg">
             <X size={16} />
           </button>
         </div>
@@ -497,7 +673,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
             </p>
           </div>
 
-          {/* Price Result Box */}
           <div className="bg-white border-2 border-blue-500/20 rounded-2xl p-4 sm:px-6 shadow-sm flex flex-col items-start md:items-end self-stretch md:self-auto min-w-[240px]">
             {calcMatch.isOutOfBounds ? (
               <div className="w-full text-center py-2">
@@ -533,7 +708,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-blue-100/80">
-          {/* Step 1: Select Brand */}
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-2">
               {isAr ? '1. اختر الماركة المصنعة:' : '1. Select Panel Brand:'}
@@ -561,7 +735,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
             </div>
           </div>
 
-          {/* Step 2: Custom / Selected Wattage */}
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-2">
               {isAr ? '2. أدخل قدرة اللوح بالوات (Watt):' : '2. Enter Panel Power (Watts):'}
@@ -586,7 +759,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               ))}
             </div>
 
-            {/* Manual Free Entry Wattage Input */}
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
                 <input
@@ -626,16 +798,15 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
         </div>
       </div>
 
-      {/* 4. Controls Toolbar & Admin Global Add Range Action */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-6 bg-white p-3 rounded-2xl border border-slate-200 shadow-sm">
-        {/* Search */}
+      {/* 4. Controls Toolbar: Search & Sort */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-6 bg-white p-3.5 rounded-2xl border border-slate-200 shadow-sm">
         <div className="relative flex-1">
           <Search size={16} className="absolute right-3.5 top-3 text-slate-400" />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder={isAr ? 'ابحث عن ماركة (مثال: جينكو، لونجي، ترينا...)' : 'Search brand (e.g. Jinko, LONGi, Trina...)'}
+            placeholder={isAr ? 'ابحث عن علامة تجارية (مثال: جينكو، لونجي، ترينا...)' : 'Search brand (e.g. Jinko, LONGi, Trina...)'}
             className="w-full pr-10 pl-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
           />
           {searchTerm && (
@@ -645,19 +816,8 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
           )}
         </div>
 
-        {/* Sort, View & Admin Add Range */}
         <div className="flex items-center gap-2">
-          {isAdmin && (
-            <button
-              onClick={() => handleOpenAddModal()}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer shadow-sm active:scale-95"
-            >
-              <Plus size={15} />
-              <span>{isAr ? 'إضافة نطاق قدرة' : 'Add Wattage Range'}</span>
-            </button>
-          )}
-
-          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5">
+          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
             <ArrowUpDown size={14} className="text-slate-500 shrink-0" />
             <select
               value={sortBy}
@@ -670,31 +830,10 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               <option value="name">{isAr ? 'الاسم أبجدياً' : 'Brand Name (A-Z)'}</option>
             </select>
           </div>
-
-          <div className="flex items-center bg-slate-100 p-1 rounded-xl">
-            <button
-              type="button"
-              onClick={() => setViewMode('grid')}
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                viewMode === 'grid' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-500 hover:text-slate-900'
-              }`}
-            >
-              <LayoutGrid size={16} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('table')}
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                viewMode === 'table' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-500 hover:text-slate-900'
-              }`}
-            >
-              <List size={16} />
-            </button>
-          </div>
         </div>
       </div>
 
-      {/* 5. Main Pricing & Ranges Display */}
+      {/* 5. Main Brands Table View (Table View replacing cards with merged rowspan cells) */}
       {displayedBrands.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-3xl border border-slate-200 p-8 shadow-xs">
           <HelpCircle size={36} className="mx-auto text-slate-400 mb-3" />
@@ -704,337 +843,492 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
           <p className="text-xs text-slate-500 mt-1">
             {isAr ? 'جرّب البحث باسم آخر أو أعد ضبط شريط البحث' : 'Try searching with another name or reset search'}
           </p>
-        </div>
-      ) : viewMode === 'grid' ? (
-        /* GRID VIEW: Displays Brand Cards with Wattage Ranges */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-8">
-          {displayedBrands.map((brand, index) => {
-            const meta = BRAND_METADATA[brand];
-            const brandRecs = recordsByBrand[brand] || [];
-            const rangeRecs = brandRecs.filter(r => r.min_wattage != null && r.max_wattage != null);
-            const legacyRecs = brandRecs.filter(r => r.min_wattage == null || r.max_wattage == null);
-
-            return (
-              <div
-                key={brand}
-                className="bg-white rounded-3xl border border-slate-200 hover:border-blue-300 hover:shadow-md transition-all duration-200 overflow-hidden flex flex-col justify-between"
-              >
-                <div className="p-5">
-                  <div className="flex items-start justify-between gap-3 mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-700 font-extrabold flex items-center justify-center text-sm border border-blue-100 shrink-0">
-                        {index + 1}
-                      </div>
-                      <div>
-                        <h3 className="text-lg font-bold text-slate-900 notranslate leading-snug">
-                          {brand}
-                        </h3>
-                        <div className="text-xs text-slate-500 font-medium">
-                          {meta?.arName || brand} · <span className="text-slate-400">{meta?.tier || 'Tier 1'}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {isAdmin && (
-                      <button
-                        onClick={() => handleOpenAddModal(brand)}
-                        className="text-xs font-bold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-xl transition flex items-center gap-1 cursor-pointer shrink-0"
-                        title={isAr ? 'إضافة نطاق قدرة' : 'Add Range'}
-                      >
-                        <Plus size={13} />
-                        <span>{isAr ? 'نطاق' : 'Range'}</span>
-                      </button>
-                    )}
-                  </div>
-
-                  <p className="text-xs text-slate-600 line-clamp-2 mb-4 bg-slate-50 p-2 rounded-xl border border-slate-100">
-                    {meta?.highlight || 'لوح شمسي معتمد عالي الكفاءة ومطابق للمواصفات القياسية.'}
-                  </p>
-
-                  {/* Display Wattage Ranges */}
-                  <div className="space-y-2 mb-4">
-                    <span className="text-[11px] font-bold text-slate-500 block">
-                      {isAr ? 'نطاقات أسعار قدرة الوات:' : 'Wattage Ranges & Prices:'}
-                    </span>
-
-                    {rangeRecs.length > 0 ? (
-                      rangeRecs.map((r) => (
-                        <div
-                          key={r.price_id}
-                          className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-xs"
-                        >
-                          <div>
-                            <span className="font-bold text-slate-900 font-mono">
-                              {r.min_wattage} - {r.max_wattage} {isAr ? 'وات' : 'W'}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-extrabold text-blue-600 font-mono">
-                              {r.price_per_watt.toFixed(2)} <span className="text-[10px] font-sans text-slate-500">{isAr ? 'ج.م/وات' : 'EGP/W'}</span>
-                            </span>
-
-                            {isAdmin && (
-                              <div className="flex items-center gap-1 mr-1">
-                                <button
-                                  onClick={() => handleOpenEditModal(r)}
-                                  className="p-1 text-blue-600 hover:text-blue-800 bg-white rounded-lg border border-slate-200 hover:bg-blue-50 transition cursor-pointer"
-                                  title={isAr ? 'تعديل النطاق' : 'Edit'}
-                                >
-                                  <Edit2 size={12} />
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteRange(r.price_id, brand)}
-                                  className="p-1 text-red-500 hover:text-red-700 bg-white rounded-lg border border-slate-200 hover:bg-red-50 transition cursor-pointer"
-                                  title={isAr ? 'حذف النطاق' : 'Delete'}
-                                >
-                                  <Trash2 size={12} />
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-xs flex items-center justify-between">
-                        <span className="text-slate-500 text-[11px] italic">
-                          {isAr ? 'السعر الأساسي الموحد (سجل قديم):' : 'Legacy Flat Price:'}
-                        </span>
-                        <span className="font-extrabold text-blue-600 font-mono">
-                          {(livePrices[brand] ?? 12.00).toFixed(2)} {isAr ? 'ج.م/وات' : 'EGP/W'}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-                  <span className="text-[11px] text-slate-500 font-medium">
-                    {isAr ? 'ضمان رسمي وأسعار موحدة' : 'Official Warranty & Pricing'}
-                  </span>
-
-                  {onNavigateToBrandProducts && (
-                    <button
-                      type="button"
-                      onClick={() => onNavigateToBrandProducts(brand)}
-                      className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 transition cursor-pointer"
-                    >
-                      <span>{isAr ? 'تصفح الألواح' : 'View Panels'}</span>
-                      <ExternalLink size={13} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          <button
+            onClick={() => setSearchTerm('')}
+            className="mt-4 px-4 py-2 bg-blue-50 text-blue-600 text-xs font-bold rounded-xl hover:bg-blue-100 transition cursor-pointer"
+          >
+            {isAr ? 'إعادة ضبط البحث' : 'Clear search'}
+          </button>
         </div>
       ) : (
-        /* TABLE VIEW */
-        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden mb-8">
+        <div className="w-full overflow-hidden rounded-3xl border border-slate-200 shadow-sm bg-white mb-8">
           <div className="overflow-x-auto">
-            <table className="w-full text-right border-collapse">
+            <table className="w-full text-right border-collapse min-w-[720px]">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50/80 text-xs font-bold text-slate-600">
-                  <th className="py-3.5 px-4 text-center w-12">#</th>
-                  <th className="py-3.5 px-4">{isAr ? 'العلامة التجارية' : 'Brand Name'}</th>
-                  <th className="py-3.5 px-4">{isAr ? 'نطاقات أسعار القدرة (ج.م/وات)' : 'Wattage Ranges & Prices'}</th>
-                  <th className="py-3.5 px-4 text-center">{isAr ? 'الإجراءات' : 'Actions'}</th>
+                <tr className="bg-slate-50/90 border-b border-slate-200 text-xs font-bold text-slate-600 tracking-wide">
+                  <th className="py-4 px-6 text-right w-[32%]">
+                    {isAr ? 'البرند (العلامة التجارية)' : 'Brand Name'}
+                  </th>
+                  <th className="py-4 px-6 text-center w-[26%]">
+                    {isAr ? 'نطاق القدرة' : 'Wattage Range'}
+                  </th>
+                  <th className="py-4 px-6 text-center w-[22%]">
+                    {isAr ? 'السعر لكل وات' : 'Price per Watt'}
+                  </th>
+                  <th className="py-4 px-6 text-center w-[20%]">
+                    {isAr ? (isAdmin ? 'المميزات والإدارة' : 'المميزات') : (isAdmin ? 'Features & Admin' : 'Features')}
+                  </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {displayedBrands.map((brand, index) => {
-                  const meta = BRAND_METADATA[brand];
-                  const brandRecs = recordsByBrand[brand] || [];
-                  const rangeRecs = brandRecs.filter(r => r.min_wattage != null && r.max_wattage != null);
 
-                  return (
-                    <tr key={brand} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="py-3.5 px-4 text-center text-xs font-bold text-slate-400">
-                        {index + 1}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <div className="flex flex-col">
-                          <span className="font-bold text-slate-900 notranslate">{brand}</span>
-                          <span className="text-[11px] text-slate-500">
-                            {meta?.arName || brand} · {meta?.tier || 'Tier 1'}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-4">
-                        {rangeRecs.length > 0 ? (
-                          <div className="flex flex-wrap gap-2">
-                            {rangeRecs.map(r => (
-                              <span key={r.price_id} className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 text-blue-900 rounded-lg text-xs font-mono font-semibold border border-blue-100">
-                                {r.min_wattage}-{r.max_wattage}W: <span className="font-bold text-blue-600">{r.price_per_watt.toFixed(2)}</span> ج.م/وات
+              {displayedBrands.map((brand, bIndex) => {
+                const meta = BRAND_METADATA[brand];
+                const brandRecs = recordsByBrand[brand] || [];
+                const rangeRecs = brandRecs
+                  .filter(r => r.min_wattage != null && r.max_wattage != null)
+                  .sort((a, b) => (a.min_wattage ?? 0) - (b.min_wattage ?? 0));
+
+                const hasRanges = rangeRecs.length > 0;
+                const rowSpanCount = hasRanges ? rangeRecs.length : 1;
+                const fallbackPrice = livePrices[brand] ?? 12.00;
+
+                return (
+                  <tbody
+                    key={brand}
+                    className="border-b-2 border-slate-200/80 hover:bg-slate-50/30 transition-colors"
+                  >
+                    {hasRanges ? (
+                      rangeRecs.map((range, rIndex) => (
+                        <tr
+                          key={range.price_id}
+                          className="border-b border-slate-100 last:border-b-0"
+                        >
+                          {/* 1. Brand Cell: Merged vertically with rowSpan across all ranges */}
+                          {rIndex === 0 && (
+                            <td
+                              rowSpan={rowSpanCount}
+                              className="py-4 px-6 align-middle border-l border-slate-100 bg-white"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-700 font-extrabold flex items-center justify-center text-sm border border-blue-100 shrink-0">
+                                  {bIndex + 1}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-extrabold text-slate-900 text-base leading-tight notranslate">
+                                      {brand}
+                                    </span>
+                                    <span className="text-xs text-slate-500 font-medium">
+                                      ({meta?.arName || brand})
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">
+                                    <span className="text-blue-700 font-semibold">{meta?.tier || 'Tier 1'}</span>
+                                    <span className="text-slate-300">·</span>
+                                    <span>{meta?.country || 'عالمي'}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          )}
+
+                          {/* 2. Wattage Range Cell */}
+                          <td className="py-4 px-6 text-center align-middle">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-800 rounded-xl text-xs font-mono font-bold">
+                              <span>{range.min_wattage}</span>
+                              <span className="text-slate-400">–</span>
+                              <span>{range.max_wattage}</span>
+                              <span className="font-sans text-[11px] text-slate-500 font-normal">وات W</span>
+                            </span>
+                          </td>
+
+                          {/* 3. Price per Watt Cell */}
+                          <td className="py-4 px-6 text-center align-middle">
+                            <div className="inline-flex items-baseline gap-1 font-mono tabular-nums">
+                              <span className="text-lg font-extrabold text-blue-600">
+                                {range.price_per_watt.toFixed(2)}
+                              </span>
+                              <span className="text-xs font-bold text-slate-600 font-sans">
+                                {isAr ? 'ج.م/وات' : 'EGP/W'}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* 4. Features & Admin Actions Cell: Merged vertically with rowSpan across all ranges */}
+                          {rIndex === 0 && (
+                            <td
+                              rowSpan={rowSpanCount}
+                              className="py-4 px-6 align-middle border-r border-slate-100 bg-white"
+                            >
+                              <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
+                                {/* Features Button (Customer, Supplier, and Admin) */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenFeatures(brand)}
+                                  className="w-full sm:w-auto px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/60 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 whitespace-nowrap"
+                                  title={isAr ? `عرض مميزات علامة ${brand}` : `View ${brand} Features`}
+                                >
+                                  <Sparkles size={14} className="text-blue-600 shrink-0" />
+                                  <span>{isAr ? 'المميزات' : 'Features'}</span>
+                                </button>
+
+                                {/* Admin Edit Button (Admin Only) */}
                                 {isAdmin && (
-                                  <button onClick={() => handleDeleteRange(r.price_id, brand)} className="text-red-500 hover:text-red-700 ml-1">
-                                    <X size={12} />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenAdminEdit(brand)}
+                                    className="w-full sm:w-auto px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 whitespace-nowrap"
+                                    title={isAr ? `تعديل نطاقات وأسعار ${brand}` : `Edit ${brand} Ranges`}
+                                  >
+                                    <Edit2 size={13} className="text-amber-700 shrink-0" />
+                                    <span>{isAr ? 'تعديل' : 'Edit'}</span>
                                   </button>
                                 )}
-                              </span>
-                            ))}
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      ))
+                    ) : (
+                      /* Fallback row for brand without range records yet */
+                      <tr>
+                        {/* 1. Brand Cell */}
+                        <td className="py-4 px-6 align-middle border-l border-slate-100 bg-white">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-700 font-extrabold flex items-center justify-center text-sm border border-blue-100 shrink-0">
+                              {bIndex + 1}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-extrabold text-slate-900 text-base leading-tight notranslate">
+                                  {brand}
+                                </span>
+                                <span className="text-xs text-slate-500 font-medium">
+                                  ({meta?.arName || brand})
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">
+                                <span className="text-blue-700 font-semibold">{meta?.tier || 'Tier 1'}</span>
+                                <span className="text-slate-300">·</span>
+                                <span>{meta?.country || 'عالمي'}</span>
+                              </div>
+                            </div>
                           </div>
-                        ) : (
-                          <span className="text-xs font-mono text-slate-600 font-bold">
-                            {(livePrices[brand] ?? 12.00).toFixed(2)} ج.م/وات (أساسي)
+                        </td>
+
+                        {/* 2. Wattage Range Cell */}
+                        <td className="py-4 px-6 text-center align-middle">
+                          <span className="text-xs text-slate-500 italic bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">
+                            {isAr ? 'السعر الأساسي الموحد (سجل قديم)' : 'Legacy Flat Price (All Wattages)'}
                           </span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4 text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          {isAdmin && (
+                        </td>
+
+                        {/* 3. Price per Watt Cell */}
+                        <td className="py-4 px-6 text-center align-middle">
+                          <div className="inline-flex items-baseline gap-1 font-mono tabular-nums">
+                            <span className="text-lg font-extrabold text-blue-600">
+                              {fallbackPrice.toFixed(2)}
+                            </span>
+                            <span className="text-xs font-bold text-slate-600 font-sans">
+                              {isAr ? 'ج.م/وات' : 'EGP/W'}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* 4. Features & Admin Actions Cell */}
+                        <td className="py-4 px-6 align-middle border-r border-slate-100 bg-white">
+                          <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
                             <button
-                              onClick={() => handleOpenAddModal(brand)}
-                              className="px-2.5 py-1 text-xs font-bold text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition flex items-center gap-1 cursor-pointer"
+                              type="button"
+                              onClick={() => handleOpenFeatures(brand)}
+                              className="w-full sm:w-auto px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200/60 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 whitespace-nowrap"
+                              title={isAr ? `عرض مميزات علامة ${brand}` : `View ${brand} Features`}
                             >
-                              <Plus size={13} />
-                              <span>{isAr ? 'إضافة نطاق' : 'Add Range'}</span>
+                              <Sparkles size={14} className="text-blue-600 shrink-0" />
+                              <span>{isAr ? 'المميزات' : 'Features'}</span>
                             </button>
-                          )}
-                          {onNavigateToBrandProducts && (
-                            <button
-                              onClick={() => onNavigateToBrandProducts(brand)}
-                              className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition flex items-center gap-1 cursor-pointer"
-                            >
-                              <span>{isAr ? 'الألواح' : 'Panels'}</span>
-                              <ExternalLink size={12} />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
+
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenAdminEdit(brand)}
+                                className="w-full sm:w-auto px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 whitespace-nowrap"
+                                title={isAr ? `تحديد نطاقات وأسعار ${brand}` : `Set ${brand} Ranges`}
+                              >
+                                <Edit2 size={13} className="text-amber-700 shrink-0" />
+                                <span>{isAr ? 'تعديل' : 'Edit'}</span>
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                );
+              })}
             </table>
           </div>
         </div>
       )}
 
-      {/* 6. Admin Range Modal (Add / Edit Range) */}
-      {showRangeModal && (
+      {/* 6. Brand Features Modal (Available to Customer, Supplier, and Admin) */}
+      {selectedFeaturesBrand && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-100">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-100 relative">
             <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-                  <ShieldCheck size={20} />
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100">
+                  <Award size={22} />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">
-                    {modalMode === 'add'
-                      ? (isAr ? 'إضافة نطاق قدرة جديد' : 'Add Wattage Range')
-                      : (isAr ? 'تعديل نطاق القدرة' : 'Edit Wattage Range')}
+                  <h3 className="text-lg font-bold text-slate-900 notranslate leading-tight">
+                    {selectedFeaturesBrand}
                   </h3>
                   <span className="text-xs text-slate-500 font-medium">
-                    {modalBrand} ({BRAND_METADATA[modalBrand]?.arName})
+                    {BRAND_METADATA[selectedFeaturesBrand]?.arName} · {BRAND_METADATA[selectedFeaturesBrand]?.tier}
                   </span>
                 </div>
               </div>
 
               <button
-                onClick={() => setShowRangeModal(false)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                type="button"
+                onClick={handleCloseFeatures}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl transition cursor-pointer"
               >
                 <X size={20} />
               </button>
             </div>
 
-            {errorMsg && (
-              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-semibold rounded-xl flex items-center gap-2">
-                <AlertTriangle size={16} className="shrink-0" />
-                <span>{errorMsg}</span>
+            {/* Brand Highlight */}
+            {BRAND_METADATA[selectedFeaturesBrand]?.highlight && (
+              <div className="mb-5 p-3.5 bg-blue-50/70 border border-blue-100 rounded-2xl text-xs text-blue-900 leading-relaxed font-medium">
+                {BRAND_METADATA[selectedFeaturesBrand]?.highlight}
               </div>
             )}
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {isAr ? 'العلامة التجارية:' : 'Brand:'}
-                </label>
-                <select
-                  value={modalBrand}
-                  onChange={(e) => setModalBrand(e.target.value as SolarPanelBrand)}
-                  disabled={modalMode === 'edit'}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {SOLAR_PANEL_BRANDS.map(b => (
-                    <option key={b} value={b}>{b} ({BRAND_METADATA[b]?.arName})</option>
+            {/* Brand Features List */}
+            <div className="space-y-3 mb-6">
+              <span className="text-xs font-bold text-slate-700 block">
+                {isAr ? 'مميزات العلامة التجارية:' : 'Brand Capabilities & Features:'}
+              </span>
+
+              {BRAND_METADATA[selectedFeaturesBrand]?.features &&
+              BRAND_METADATA[selectedFeaturesBrand].features.length > 0 ? (
+                <ul className="space-y-2.5">
+                  {BRAND_METADATA[selectedFeaturesBrand].features.map((feature, idx) => (
+                    <li
+                      key={idx}
+                      className="flex items-start gap-2.5 p-3 bg-slate-50 rounded-2xl border border-slate-100 text-xs text-slate-700 leading-relaxed"
+                    >
+                      <Check size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                      <span>{feature}</span>
+                    </li>
                   ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    {isAr ? 'الحد الأدنى للقدرة (وات W):' : 'Min Wattage (W):'}
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={modalMinWatt}
-                    onChange={(e) => setModalMinWatt(e.target.value)}
-                    placeholder="500"
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                </ul>
+              ) : (
+                <div className="p-4 bg-slate-50 rounded-2xl text-center text-xs text-slate-500">
+                  {isAr ? 'لا توجد مميزات مضافة لهذا البرند حالياً' : 'No features listed for this brand currently'}
                 </div>
+              )}
+            </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    {isAr ? 'الحد الأقصى للقدرة (وات W):' : 'Max Wattage (W):'}
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={modalMaxWatt}
-                    onChange={(e) => setModalMaxWatt(e.target.value)}
-                    placeholder="600"
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+            {/* Modal Actions */}
+            <div className="flex items-center justify-between gap-3 pt-4 border-t border-slate-100">
+              {onNavigateToBrandProducts ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleCloseFeatures();
+                    onNavigateToBrandProducts(selectedFeaturesBrand);
+                  }}
+                  className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                >
+                  <span>{isAr ? `تصفح ألواح ${selectedFeaturesBrand}` : `Explore ${selectedFeaturesBrand}`}</span>
+                  <ExternalLink size={14} />
+                </button>
+              ) : (
+                <div />
+              )}
+
+              <button
+                type="button"
+                onClick={handleCloseFeatures}
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                {isAr ? 'إغلاق' : 'Close'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. Admin Manage Ranges Dialog (Admin Only) */}
+      {isAdmin && editingBrandForAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto">
+            {/* Dialog Header */}
+            <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-700 flex items-center justify-center border border-amber-200/60">
+                  <Edit2 size={20} />
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {isAr ? 'سعر الوات (جنيه/وات EGP/W):' : 'Price Per Watt (EGP/W):'}
-                </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="0.05"
-                    min="0.1"
-                    max="200"
-                    value={modalPricePerWatt}
-                    onChange={(e) => setModalPricePerWatt(e.target.value)}
-                    placeholder="12.00"
-                    className="w-full bg-white border-2 border-blue-500 rounded-xl px-3.5 py-2.5 text-base font-extrabold text-slate-900 focus:outline-none"
-                  />
-                  <span className="absolute left-3 top-3 text-xs font-bold text-slate-400">
-                    ج.م/وات
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    {isAr ? `إدارة نطاقات ${editingBrandForAdmin}` : `Manage ${editingBrandForAdmin} Ranges`}
+                  </h3>
+                  <span className="text-xs text-slate-500 font-medium">
+                    {BRAND_METADATA[editingBrandForAdmin]?.arName} · {isAr ? 'الحد الأدنى نطاق واحد، والحد الأقصى 3 نطاقات' : 'Min 1 range, Max 3 ranges'}
                   </span>
                 </div>
               </div>
-            </div>
 
-            <div className="flex items-center justify-end gap-3 mt-8 pt-4 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setShowRangeModal(false)}
-                disabled={isSaving}
-                className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                onClick={handleCloseAdminEdit}
+                disabled={isAdminSaving}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl transition cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Error Message inside modal */}
+            {adminModalError && (
+              <div className="mb-5 p-3.5 bg-red-50 border border-red-200 text-red-700 text-xs font-semibold rounded-2xl flex items-start gap-2">
+                <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                <span>{adminModalError}</span>
+              </div>
+            )}
+
+            {/* Ranges Form Sections */}
+            <div className="space-y-4 mb-6">
+              {adminRanges.map((rangeItem, idx) => {
+                const isMandatoryFirst = idx === 0;
+
+                return (
+                  <div
+                    key={idx}
+                    className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200/80 transition"
+                  >
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-lg bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">
+                          {idx + 1}
+                        </span>
+                        <span className="text-xs font-bold text-slate-800">
+                          {idx === 0
+                            ? (isAr ? 'النطاق الأول (إجباري)' : 'Range 1 (Mandatory)')
+                            : idx === 1
+                            ? (isAr ? 'النطاق الثاني (اختياري)' : 'Range 2 (Optional)')
+                            : (isAr ? 'النطاق الثالث (اختياري)' : 'Range 3 (Optional)')}
+                        </span>
+                      </div>
+
+                      {/* Delete button: only for range 2 and range 3, NEVER for range 1 */}
+                      {!isMandatoryFirst && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveRange(idx)}
+                          disabled={isAdminSaving}
+                          className="text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                          title={isAr ? `حذف النطاق ${idx + 1}` : `Delete Range ${idx + 1}`}
+                        >
+                          <Trash2 size={13} />
+                          <span>{isAr ? 'حذف' : 'Remove'}</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          {isAr ? 'الحد الأدنى (وات):' : 'Min Wattage (W):'}
+                        </label>
+                        <input
+                          type="number"
+                          min="50"
+                          max="1500"
+                          value={rangeItem.minWattage}
+                          onChange={(e) => handleUpdateAdminRangeField(idx, 'minWattage', e.target.value)}
+                          placeholder="550"
+                          disabled={isAdminSaving}
+                          className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          {isAr ? 'الحد الأقصى (وات):' : 'Max Wattage (W):'}
+                        </label>
+                        <input
+                          type="number"
+                          min="50"
+                          max="1500"
+                          value={rangeItem.maxWattage}
+                          onChange={(e) => handleUpdateAdminRangeField(idx, 'maxWattage', e.target.value)}
+                          placeholder="600"
+                          disabled={isAdminSaving}
+                          className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                          {isAr ? 'سعر الوات (ج.م/وات):' : 'Price per Watt (EGP/W):'}
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            step="0.05"
+                            min="0.1"
+                            max="200"
+                            value={rangeItem.pricePerWatt}
+                            onChange={(e) => handleUpdateAdminRangeField(idx, 'pricePerWatt', e.target.value)}
+                            placeholder="12.00"
+                            disabled={isAdminSaving}
+                            className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-sm font-bold font-mono text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                          <span className="absolute left-2.5 top-2.5 text-[10px] font-bold text-slate-400">
+                            ج.م
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Add Next Range Button (only when count < 3) */}
+            {adminRanges.length < 3 ? (
+              <button
+                type="button"
+                onClick={handleAddNextRange}
+                disabled={isAdminSaving}
+                className="w-full mb-6 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-dashed border-blue-300 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <Plus size={15} />
+                <span>
+                  {adminRanges.length === 1
+                    ? (isAr ? 'إضافة نطاق ثانٍ (+)' : 'Add Second Range (+)')
+                    : (isAr ? 'إضافة نطاق ثالث (+)' : 'Add Third Range (+)')}
+                </span>
+              </button>
+            ) : (
+              <div className="mb-6 p-2.5 bg-slate-50 border border-slate-200 text-slate-500 rounded-2xl text-center text-xs">
+                {isAr ? 'تم الوصول للحد الأقصى (3 نطاقات قدرة للعلامة التجارية)' : 'Maximum 3 ranges reached for this brand'}
+              </div>
+            )}
+
+            {/* Dialog Footer Actions */}
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={handleCloseAdminEdit}
+                disabled={isAdminSaving}
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
               >
                 {isAr ? 'إلغاء' : 'Cancel'}
               </button>
 
               <button
                 type="button"
-                onClick={handleSaveRange}
-                disabled={isSaving}
+                onClick={handleSaveAdminRanges}
+                disabled={isAdminSaving}
                 className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-md active:scale-95 disabled:opacity-50"
               >
-                {isSaving ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
-                <span>{modalMode === 'add' ? (isAr ? 'إضافة النطاق' : 'Add Range') : (isAr ? 'حفظ التغييرات' : 'Save Changes')}</span>
+                {isAdminSaving ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+                <span>{isAdminSaving ? (isAr ? 'جاري الحفظ...' : 'Saving...') : (isAr ? 'حفظ النطاقات' : 'Save Ranges')}</span>
               </button>
             </div>
           </div>
