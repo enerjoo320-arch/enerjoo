@@ -402,8 +402,7 @@ export async function addSolarPanelBrandRange(
 
   const roundedPrice = parseFloat(pricePerWatt.toFixed(2));
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Cache-Control': 'no-cache, no-store, must-revalidate'
+    'Content-Type': 'application/json'
   };
 
   try {
@@ -462,8 +461,7 @@ export async function updateSolarPanelBrandRange(
 
   const roundedPrice = parseFloat(pricePerWatt.toFixed(2));
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Cache-Control': 'no-cache, no-store, must-revalidate'
+    'Content-Type': 'application/json'
   };
 
   try {
@@ -506,9 +504,7 @@ export async function updateSolarPanelBrandRange(
 export async function deleteSolarPanelBrandRange(priceId: string): Promise<void> {
   if (!priceId) throw new Error('Missing price ID for deletion');
 
-  const headers: Record<string, string> = {
-    'Cache-Control': 'no-cache, no-store, must-revalidate'
-  };
+  const headers: Record<string, string> = {};
 
   try {
     const token = await auth.currentUser?.getIdToken();
@@ -551,8 +547,7 @@ export async function updateSolarPanelBrandPrice(
 
   const rounded = parseFloat(newPricePerWatt.toFixed(2));
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'Cache-Control': 'no-cache, no-store, must-revalidate'
+    'Content-Type': 'application/json'
   };
 
   try {

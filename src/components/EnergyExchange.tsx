@@ -1190,6 +1190,16 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               </div>
             )}
 
+            {/* Helpful Boundary Guidance Notice */}
+            <div className="mb-4 p-3 bg-blue-50/70 border border-blue-100 rounded-2xl text-[11px] text-blue-800 flex items-start gap-2">
+              <Info size={15} className="shrink-0 mt-0.5 text-blue-600" />
+              <span>
+                {isAr
+                  ? 'ملاحظة: حدود النطاقات شاملة ومغلقة؛ لتفادي التداخل، يجب أن يبدأ النطاق التالي بعد نهاية النطاق السابق مباشرة (مثال: النطاق الأول 550 - 600 وات، والنطاق الثاني 601 - 655 وات).'
+                  : 'Note: Range boundaries are inclusive. To avoid overlap, consecutive ranges must not share boundaries (e.g. 550–600 W, then 601–655 W).'}
+              </span>
+            </div>
+
             {/* Ranges Form Sections */}
             <div className="space-y-4 mb-6">
               {adminRanges.map((rangeItem, idx) => {
