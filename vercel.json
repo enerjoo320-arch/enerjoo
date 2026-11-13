@@ -5,19 +5,19 @@
   "rewrites": [
     {
       "source": "/api/chat",
-      "destination": "https://fiyg.app.n8n.cloud/webhook/enerjoo-chat"
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/chat"
     },
     {
       "source": "/api/chat/:path*",
-      "destination": "https://fiyg.app.n8n.cloud/webhook/enerjoo-chat"
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/chat"
     },
     {
       "source": "/chat",
-      "destination": "https://fiyg.app.n8n.cloud/webhook/enerjoo-chat"
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/chat"
     },
     {
       "source": "/chat/:path*",
-      "destination": "https://fiyg.app.n8n.cloud/webhook/enerjoo-chat"
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/chat"
     },
     {
       "source": "/api/products/:path*",

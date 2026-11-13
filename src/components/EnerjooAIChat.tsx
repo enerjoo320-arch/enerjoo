@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { auth } from '../lib/firebase';
 import { 
   Zap, 
   X, 
@@ -57,7 +58,7 @@ interface EnerjooAIChatProps {
   activeProductId?: string;
 }
 
-const N8N_CHAT_WEBHOOK_URL = 'https://fiyg.app.n8n.cloud/webhook/enerjoo-chat';
+const CHAT_API_ENDPOINT = '/api/chat';
 const STORAGE_SESSION_KEY = 'enerjoo_ai_chat_session_id';
 const STORAGE_MESSAGES_KEY = 'enerjoo_ai_chat_history';
 
@@ -713,44 +714,116 @@ export default function EnerjooAIChat({
           content: m.text
         }));
 
-      // Format payload with message, chatInput, sessionId, messageId, and history
-      // Matches n8n Webhook specifications
+      // Format payload with message, chatInput, sessionId, messageId, history, selectedProductIds, and turnstileToken
+      const turnstileToken =
+        typeof window !== 'undefined' && typeof (window as any).__ENERJOO_TURNSTILE_TOKEN__ === 'string'
+          ? (window as any).__ENERJOO_TURNSTILE_TOKEN__
+          : '';
+
       const payload: Record<string, any> = {
         message: text,
         chatInput: text,
         sessionId: sessionId,
         messageId: userMessage.id,
-        history
+        history,
+        selectedProductIds,
+        turnstileToken
       };
 
-      // Only send selectedProductIds when the customer actually selected products
-      if (selectedProductIds.length > 0) {
-        payload.selectedProductIds = selectedProductIds;
+      // Wait for Firebase Auth hydration before obtaining ID token
+      if (typeof (auth as any)?.authStateReady === 'function') {
+        try {
+          await (auth as any).authStateReady();
+        } catch {
+          // Ignore authStateReady errors
+        }
       }
 
-      // Send POST request directly to the n8n Cloud production webhook
-      const response = await fetch(N8N_CHAT_WEBHOOK_URL, {
-        method: 'POST',
-        headers: {
+      const buildHeaders = async (forceRefresh = false): Promise<Record<string, string>> => {
+        const hdrs: Record<string, string> = {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
-        },
+        };
+        try {
+          const token = await auth.currentUser?.getIdToken(forceRefresh);
+          if (token) {
+            hdrs['Authorization'] = `Bearer ${token}`;
+          }
+        } catch {
+          // Optional auth token
+        }
+        return hdrs;
+      };
+
+      // Send POST request through Enerjoo backend -> Cloudflare Worker (/chat) -> n8n Agent
+      let response = await fetch(CHAT_API_ENDPOINT, {
+        method: 'POST',
+        headers: await buildHeaders(false),
         body: JSON.stringify(payload)
       });
+
+      // On 401 with an active Firebase session, refresh token once and retry
+      if (response.status === 401 && auth.currentUser) {
+        response = await fetch(CHAT_API_ENDPOINT, {
+          method: 'POST',
+          headers: await buildHeaders(true),
+          body: JSON.stringify(payload)
+        });
+      }
 
       const responseText = await response.text();
       let data: any = null;
       try {
         data = JSON.parse(responseText);
+        if (typeof data === 'string') {
+          try {
+            const inner = JSON.parse(data);
+            if (inner && typeof inner === 'object') {
+              data = inner;
+            }
+          } catch {
+            // Keep string data
+          }
+        }
       } catch {
         // Non-JSON or HTML response
       }
 
-      // n8n response item can be an object or single item in an array
+      // Response item can be an object or single item in an array
       const responseItem = Array.isArray(data) ? data[0] : data;
 
       // Extract and strictly validate reply text (must be non-empty string)
-      const rawReplyCandidate = responseItem?.reply ?? responseItem?.output ?? responseItem?.message ?? responseItem?.text;
+      let rawReplyCandidate =
+        typeof responseItem === 'string'
+          ? responseItem
+          : (responseItem?.reply ?? responseItem?.output ?? responseItem?.message ?? responseItem?.text);
+
+      // Unwrap nested JSON string inside output/reply if present
+      let nestedProducts: ChatProductItem[] | undefined;
+      let nestedRecommendation: InverterAgentRecommendationResponse | undefined;
+      if (typeof rawReplyCandidate === 'string') {
+        const trimmedCandidate = rawReplyCandidate.trim();
+        if (trimmedCandidate.startsWith('{') && trimmedCandidate.endsWith('}')) {
+          try {
+            const innerObj = JSON.parse(trimmedCandidate);
+            if (innerObj && typeof innerObj === 'object') {
+              const innerText = innerObj.reply ?? innerObj.output ?? innerObj.message ?? innerObj.text;
+              if (typeof innerText === 'string' && innerText.trim()) {
+                rawReplyCandidate = innerText;
+              }
+              if (Array.isArray(innerObj.products) && innerObj.products.length > 0) {
+                nestedProducts = innerObj.products;
+              }
+              if (innerObj.recommendation && typeof innerObj.recommendation === 'object') {
+                nestedRecommendation = innerObj.recommendation;
+              }
+            }
+          } catch {
+            // Keep as plain text
+          }
+        }
+      }
+
       const validReply = typeof rawReplyCandidate === 'string' && rawReplyCandidate.trim().length > 0
         ? rawReplyCandidate.trim()
         : null;
@@ -759,23 +832,27 @@ export default function EnerjooAIChat({
       const cleanReply = validReply ? normalizeAssistantMessage(validReply) : '';
 
       if (response.ok && cleanReply) {
-        // Update session ID if n8n returned a new or synchronized sessionId
+        // Keep stable UUID sessionId; only adopt server sessionId if local sessionId is invalid
         const returnedSessionId = responseItem?.session_id || responseItem?.sessionId;
-        if (typeof returnedSessionId === 'string' && returnedSessionId.trim()) {
+        if (!isValidUUID(sessionId) && typeof returnedSessionId === 'string' && returnedSessionId.trim()) {
           const nextId = returnedSessionId.trim();
           setSessionId(nextId);
           try { localStorage.setItem(STORAGE_SESSION_KEY, nextId); } catch { /* Ignore storage errors */ }
         }
 
-        // Optional compatible catalog products from n8n response
-        const productsList = Array.isArray(responseItem?.products) && responseItem.products.length > 0
+        // Optional compatible catalog products from response
+        const rawProductsList = Array.isArray(responseItem?.products) && responseItem.products.length > 0
           ? responseItem.products
+          : nestedProducts;
+        const productsList = Array.isArray(rawProductsList) && rawProductsList.length > 0
+          ? rawProductsList
           : undefined;
 
-        // Optional structured inverter recommendation from n8n response
-        const recommendationObj = responseItem?.recommendation && typeof responseItem.recommendation === 'object'
-          ? responseItem.recommendation
-          : undefined;
+        // Optional structured inverter recommendation from response
+        const recommendationObj =
+          (responseItem?.recommendation && typeof responseItem.recommendation === 'object'
+            ? responseItem.recommendation
+            : nestedRecommendation) || undefined;
 
         const botReply: ChatMessage = {
           id: `reply-${Date.now()}`,
@@ -787,26 +864,38 @@ export default function EnerjooAIChat({
         };
         setMessages(prev => [...prev, botReply]);
       } else {
-        // If n8n returns an error status (e.g. 404 inactive workflow, 500) or missing reply,
-        // display a clear and friendly message in the UI with retry support.
-        // Never show a fake AI answer or pretend the request succeeded.
+        const backendErrorMessage =
+          typeof responseItem?.error?.message === 'string' && responseItem.error.message.trim()
+            ? responseItem.error.message.trim()
+            : (typeof responseItem?.error === 'string' && responseItem.error.trim()
+                ? responseItem.error.trim()
+                : '');
+
         let errorMsg = '';
-        if (response.status === 404) {
+        if (response.status === 401) {
           errorMsg = lang === 'ar'
-            ? 'وكيل الذكاء الاصطناعي (n8n Webhook) غير مفعّل أو قيد التحديث حالياً. يرجى تفعيل الـ Workflow في n8n والمحاولة مرة أخرى.'
-            : 'The AI Agent (n8n Webhook) is currently inactive or being updated. Please verify the workflow is active in n8n and try again.';
-        } else if (response.status >= 500) {
+            ? (backendErrorMessage || 'سجّل الدخول إلى حسابك في Enerjoo أولاً لتتمكن من استخدام المساعد الذكي.')
+            : 'Please sign in to your Enerjoo account first to use the AI Assistant.';
+        } else if (response.status === 403) {
           errorMsg = lang === 'ar'
-            ? `تعذر معالجة الطلب في خادم الذكاء الاصطناعي (رمز الاستجابة: ${response.status}). يرجى إعادة المحاولة بعد لحظات.`
-            : `Unable to process request on the AI server (Status: ${response.status}). Please try again in a moment.`;
+            ? (backendErrorMessage || 'تعذر التحقق من الصلاحية أو الحماية الأمنية. يرجى إعادة المحاولة.')
+            : 'Security or authorization verification failed. Please try again.';
+        } else if (response.status === 429) {
+          errorMsg = lang === 'ar'
+            ? 'أرسلت رسائل كثيرة في وقت قصير. يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.'
+            : 'Too many requests. Please wait a moment and try again.';
+        } else if (response.status >= 500 || response.status === 404) {
+          errorMsg = lang === 'ar'
+            ? (backendErrorMessage || 'المساعد الذكي مشغول أو قيد التحديث حالياً. يرجى المحاولة مرة أخرى بعد لحظات.')
+            : 'The AI Assistant is currently busy or updating. Please try again in a moment.';
         } else if (!validReply) {
           errorMsg = lang === 'ar'
-            ? 'لم يتم استلام رد صالح من وكيل الذكاء الاصطناعي. يرجى إعادة المحاولة.'
-            : 'Received an empty or invalid response from the AI Agent. Please try again.';
+            ? 'لم يصل رد واضح من المساعد الذكي. يرجى المحاولة مرة أخرى.'
+            : 'Received an empty or invalid response from the AI Assistant. Please try again.';
         } else {
           errorMsg = lang === 'ar'
-            ? `حدث خطأ أثناء التواصل مع الذكاء الاصطناعي (${response.status}). يرجى المحاولة مرة أخرى.`
-            : `An error occurred while communicating with the AI Agent (${response.status}). Please try again.`;
+            ? (backendErrorMessage || 'حدث خطأ أثناء التواصل مع المساعد الذكي. يرجى المحاولة مرة أخرى.')
+            : 'An error occurred while communicating with the AI Assistant. Please try again.';
         }
 
         const errorReply: ChatMessage = {
@@ -820,17 +909,11 @@ export default function EnerjooAIChat({
         setMessages(prev => [...prev, errorReply]);
       }
     } catch (error) {
-      console.warn('[Enerjoo AI Chat] n8n request failed:', error);
-      const errorDetails = error instanceof Error ? error.message : String(error);
-      const isCorsOrNetwork = /failed to fetch|networkerror|cors|load failed/i.test(errorDetails);
+      console.warn('[Enerjoo AI Chat] Request error:', error instanceof Error ? error.message : 'Network error');
 
-      const errorText = isCorsOrNetwork
-        ? (lang === 'ar'
-            ? 'تعذر الاتصال بمحرك الذكاء الاصطناعي (n8n Cloud Webhook). يرجى التأكد من تشغيل الـ Workflow والسماح بالنطاق (CORS: https://enerjoo.com) في إعدادات n8n.'
-            : 'Unable to connect to the n8n Cloud Webhook. Please verify the workflow is active and CORS is allowed in n8n settings.')
-        : (lang === 'ar'
-            ? 'حدث خطأ في الاتصال بمحرك الذكاء الاصطناعي. يرجى المحاولة مرة أخرى.'
-            : 'Connection error while contacting the AI Agent. Please try again.');
+      const errorText = lang === 'ar'
+        ? 'تعذر الاتصال بالمساعد الذكي حالياً. يرجى التأكد من اتصالك بالإنترنت والمحاولة مرة أخرى.'
+        : 'Unable to connect to the AI Assistant right now. Please check your connection and try again.';
 
       setMessages(prev => [
         ...prev,

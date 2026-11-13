@@ -461,13 +461,34 @@ async function startServer() {
     console.error("Unhandled rejection at:", promise, "reason:", reason);
   });
 
-  // Defensive HTTP Security Headers
+  const ALLOWED_SERVER_ORIGINS = new Set([
+    "https://enerjoo.com",
+    "https://www.enerjoo.com",
+    "https://enerjoo.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:5173",
+  ]);
+
+  function isServerOriginAllowed(origin: string): boolean {
+    if (!origin) return false;
+    const lower = origin.toLowerCase().trim();
+    if (ALLOWED_SERVER_ORIGINS.has(lower)) return true;
+    if (/^https:\/\/[a-z0-9-]+\.enerjoo\.com$/.test(lower)) return true;
+    if (/^https:\/\/ais-(?:dev|pre)-[a-z0-9-]+\.[a-z0-9-]+\.run\.app$/.test(lower)) return true;
+    return false;
+  }
+
+  // Defensive HTTP Security & Whitelisted CORS Headers
   app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-XSS-Protection", "1; mode=block");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     res.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=(self)");
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    const origin = req.header("Origin") || "";
+    res.setHeader("Vary", "Origin");
+    if (origin && isServerOriginAllowed(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
     const reqHeaders = req.header("Access-Control-Request-Headers");
     if (reqHeaders) {
@@ -477,7 +498,10 @@ async function startServer() {
     }
     res.setHeader("Access-Control-Max-Age", "86400");
     if (req.method === "OPTIONS") {
-      return res.sendStatus(200);
+      if (origin && !isServerOriginAllowed(origin)) {
+        return res.sendStatus(403);
+      }
+      return res.sendStatus(204);
     }
     next();
   });
@@ -3704,132 +3728,72 @@ ${urls.join("\n")}
     }
   });
 
-  // n8n Production AI Agent Chat Endpoint (/chat, /api/chat, and /api/n8n-chat)
-  const N8N_CHAT_WEBHOOK_URL = "https://fiyg.app.n8n.cloud/webhook/enerjoo-chat";
-
+  // Enerjoo Cloudflare Worker Chat Proxy (/chat, /api/chat, and /api/n8n-chat)
   app.all(["/chat", "/api/chat", "/chat/", "/api/chat/", "/api/n8n-chat"], async (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    const origin = req.header("Origin") || "";
+    res.setHeader("Vary", "Origin");
+    if (origin && isServerOriginAllowed(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Firebase-Auth, X-Requested-With, Accept");
 
     if (req.method === "OPTIONS") {
-      return res.sendStatus(200);
+      if (origin && !isServerOriginAllowed(origin)) {
+        return res.sendStatus(403);
+      }
+      return res.sendStatus(204);
     }
 
     if (req.method !== "POST") {
-      return res.status(200).json({
-        ok: true,
-        status: "online",
-        message: "Enerjoo AI Agent (n8n Cloud) chat endpoint. Send a POST request with message and sessionId."
-      });
-    }
-
-    const { message, chatInput, history, sessionId, messageId, selectedProductIds } = req.body || {};
-    const userText = typeof message === "string" ? message.trim() : (typeof chatInput === "string" ? chatInput.trim() : (typeof req.body?.prompt === "string" ? req.body.prompt.trim() : ""));
-    const activeSessionId = (sessionId && typeof sessionId === "string" && sessionId.trim())
-      ? sessionId.trim()
-      : `session-${Date.now()}`;
-
-    const effectiveMessageId = (messageId && typeof messageId === "string" && messageId.trim())
-      ? messageId.trim()
-      : `msg-${Date.now()}`;
-
-    // Standard n8n chat payload matching frontend specification
-    const n8nPayload: Record<string, any> = {
-      message: userText,
-      chatInput: userText,
-      sessionId: activeSessionId,
-      messageId: effectiveMessageId
-    };
-
-    if (Array.isArray(history) && history.length > 0) {
-      n8nPayload.history = history;
-    }
-
-    if (Array.isArray(selectedProductIds) && selectedProductIds.length > 0) {
-      n8nPayload.selectedProductIds = selectedProductIds;
-    }
-
-    try {
-      const n8nRes = await fetch(N8N_CHAT_WEBHOOK_URL, {
-        method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-          "Accept": "application/json"
-        },
-        body: JSON.stringify(n8nPayload),
-        signal: AbortSignal.timeout(60000)
-      });
-
-      if (!n8nRes.ok) {
-        const errorText = await n8nRes.text().catch(() => "");
-        return res.status(n8nRes.status).json({
-          success: false,
-          ok: false,
-          error: `n8n Webhook returned status ${n8nRes.status}`,
-          details: errorText.slice(0, 500)
-        });
-      }
-
-      const rawText = await n8nRes.text();
-      let data: any = null;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        // Plain text fallback
-        if (rawText && rawText.trim()) {
-          return res.status(200).json({
-            success: true,
-            ok: true,
-            reply: rawText.trim(),
-            sessionId: activeSessionId
-          });
-        }
-        return res.status(502).json({
-          success: false,
-          ok: false,
-          error: "Empty or invalid response from n8n webhook"
-        });
-      }
-
-      // Extract valid reply safely
-      let replyText = "";
-      if (typeof data?.reply === "string" && data.reply.trim()) {
-        replyText = data.reply.trim();
-      } else if (typeof data?.output === "string" && data.output.trim()) {
-        replyText = data.output.trim();
-      } else if (typeof data?.message === "string" && data.message.trim()) {
-        replyText = data.message.trim();
-      } else if (typeof data?.text === "string" && data.text.trim()) {
-        replyText = data.text.trim();
-      } else if (Array.isArray(data) && data.length > 0) {
-        const first = data[0];
-        replyText = typeof first?.reply === "string" ? first.reply.trim() : (typeof first?.output === "string" ? first.output.trim() : "");
-      }
-
-      if (!replyText) {
-        return res.status(502).json({
-          success: false,
-          ok: false,
-          error: "No valid reply received from n8n AI Agent"
-        });
-      }
-
-      return res.status(200).json({
-        success: true,
-        ok: true,
-        reply: replyText,
-        products: Array.isArray(data.products) ? data.products : undefined,
-        recommendation: data.recommendation || undefined,
-        sessionId: data.sessionId || data.session_id || activeSessionId
-      });
-    } catch (err: any) {
-      console.error("Error communicating with n8n chat webhook:", err);
-      return res.status(502).json({
-        success: false,
+      return res.status(405).json({
         ok: false,
-        error: "Failed to connect to n8n AI Agent webhook",
-        details: err?.message || "Network error"
+        success: false,
+        error: {
+          code: "METHOD_NOT_ALLOWED",
+          message: "يرجى استخدام طلب POST للتواصل مع المساعد الذكي."
+        }
+      });
+    }
+
+    const targetUrl = `${CF_WORKER_API}/chat`;
+    try {
+      const proxyHeaders: Record<string, string> = {
+        "Origin": "https://enerjoo.com",
+        "Accept": "application/json",
+      };
+      const authHeader = extractBearerAuthHeader(req);
+      if (authHeader) {
+        proxyHeaders["Authorization"] = authHeader;
+      }
+      const fetchOptions: RequestInit = {
+        method: "POST",
+        headers: proxyHeaders,
+        signal: AbortSignal.timeout(35000),
+      };
+      if (req.body && Object.keys(req.body).length > 0) {
+        proxyHeaders["Content-Type"] = "application/json";
+        fetchOptions.body = JSON.stringify(req.body);
+      }
+
+      const apiRes = await fetch(targetUrl, fetchOptions);
+      const data = await apiRes.text();
+      res
+        .status(apiRes.status)
+        .set("Content-Type", apiRes.headers.get("content-type") || "application/json; charset=utf-8")
+        .send(data);
+    } catch (err: any) {
+      const isTimeout = err?.name === "TimeoutError" || err?.name === "AbortError";
+      console.error(`[Chat Proxy] Upstream ${isTimeout ? "timeout" : "network error"}`);
+      res.status(isTimeout ? 504 : 502).json({
+        ok: false,
+        success: false,
+        error: {
+          code: isTimeout ? "AI_AGENT_TIMEOUT" : "AI_AGENT_UNREACHABLE",
+          message: isTimeout
+            ? "استغرق المساعد الذكي وقتاً أطول من المعتاد. يرجى إعادة المحاولة."
+            : "تعذر الاتصال بالمساعد الذكي حالياً. يرجى المحاولة مرة أخرى بعد لحظات."
+        }
       });
     }
   });

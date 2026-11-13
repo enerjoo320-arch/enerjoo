@@ -31,6 +31,11 @@ export interface Env {
   PRODUCT_ADMIN_EMAILS?: string;
   PRODUCT_ADMIN_UIDS?: string;
   FIREBASE_PROJECT_ID?: string;
+  N8N_CHAT_ENABLED?: string;
+  N8N_WEBHOOK_URL?: string;
+  ENERJOO_N8N_SECRET?: string;
+  TURNSTILE_SECRET_KEY?: string;
+  REQUIRE_TURNSTILE?: string;
 }
 
 // ============================================================================
@@ -64,7 +69,7 @@ export const getCorsHeaders = (request: Request): Record<string, string> => {
     return {
       'Access-Control-Allow-Origin': origin,
       'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Firebase-Auth, X-Requested-With',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Firebase-Auth, X-Requested-With, Accept',
       'Access-Control-Max-Age': '86400',
       'Vary': 'Origin',
     };
@@ -86,7 +91,7 @@ function json(data: unknown, status = 200, request?: Request): Response {
   } else {
     headers['Access-Control-Allow-Origin'] = 'https://enerjoo.com';
     headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
-    headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Firebase-Auth, X-Requested-With';
+    headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Firebase-Auth, X-Requested-With, Accept';
     headers['Vary'] = 'Origin';
   }
 
@@ -121,7 +126,7 @@ export const EXCLUDED_ADMIN_EMAILS: string[] = [
 
 const DEFAULT_FIREBASE_PROJECT_ID = 'gen-lang-client-0409057996';
 const DEFAULT_FIRESTORE_DATABASE_ID = 'ai-studio-2546f389-38ec-4b43-b0f4-5eede498569d';
-const N8N_CHAT_WEBHOOK_URL = 'https://fiyg.app.n8n.cloud/webhook/enerjoo-chat';
+const DEFAULT_N8N_PRODUCTION_WEBHOOK_URL = 'https://enerjoo-new.onrender.com/webhook/37e7e1fc-d599-4fde-8581-cd1802d059bb';
 
 // ============================================================================
 // Base64URL and Cryptographic Helpers
@@ -1127,18 +1132,201 @@ export default {
 };
 
 // ============================================================================
-// 0. /chat Handler (n8n Cloud Primary with Deterministic Consultant Fallback)
+// 0. /chat Handler (n8n Production AI Agent Primary with Rollback Consultant)
 // ============================================================================
+function tryParseJsonSafe(raw: string): any {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeN8nChatResponse(
+  n8nRawText: string,
+  sessionId: string
+): {
+  reply: string;
+  products: any[];
+  recommendation?: any;
+  intent: string;
+  sessionId: string;
+} | null {
+  const trimmedRaw = (n8nRawText || '').trim();
+  if (!trimmedRaw) return null;
+
+  let parsed: any = tryParseJsonSafe(trimmedRaw);
+
+  // Unwrap double-encoded JSON string if returned by upstream node
+  if (typeof parsed === 'string') {
+    const inner = tryParseJsonSafe(parsed.trim());
+    if (inner !== null) {
+      parsed = inner;
+    }
+  }
+
+  // Handle n8n array response [{ ... }]
+  const item = Array.isArray(parsed) ? parsed[0] : parsed;
+
+  if (typeof parsed === 'string' && parsed.trim()) {
+    return {
+      reply: parsed.trim(),
+      products: [],
+      intent: 'n8n_agent',
+      sessionId,
+    };
+  }
+
+  if (item && typeof item === 'object') {
+    let rawReply =
+      item.reply ??
+      item.output ??
+      item.text ??
+      item.response ??
+      item.message ??
+      item.answer ??
+      item.content;
+
+    let products: any[] = Array.isArray(item.products)
+      ? item.products
+      : (Array.isArray(item.matchedProducts) ? item.matchedProducts : []);
+    let recommendation = item.recommendation && typeof item.recommendation === 'object' ? item.recommendation : undefined;
+    let intent = typeof item.intent === 'string' && item.intent.trim() ? item.intent.trim() : 'n8n_agent';
+    const resolvedSessionId =
+      typeof item.sessionId === 'string' && item.sessionId.trim()
+        ? item.sessionId.trim()
+        : (typeof item.session_id === 'string' && item.session_id.trim() ? item.session_id.trim() : sessionId);
+
+    // Handle AI Agent JSON-serialized text inside `output` or `reply`
+    if (typeof rawReply === 'string') {
+      const candidate = rawReply.trim();
+      if (candidate.startsWith('{') && candidate.endsWith('}')) {
+        const nested = tryParseJsonSafe(candidate);
+        if (nested && typeof nested === 'object') {
+          const nestedReply =
+            nested.reply ?? nested.output ?? nested.text ?? nested.response ?? nested.message ?? nested.answer;
+          if (typeof nestedReply === 'string' && nestedReply.trim()) {
+            rawReply = nestedReply;
+          }
+          if (Array.isArray(nested.products) && products.length === 0) {
+            products = nested.products;
+          }
+          if (!recommendation && nested.recommendation && typeof nested.recommendation === 'object') {
+            recommendation = nested.recommendation;
+          }
+          if (typeof nested.intent === 'string' && nested.intent.trim()) {
+            intent = nested.intent.trim();
+          }
+        }
+      }
+    }
+
+    if (typeof rawReply === 'string' && rawReply.trim().length > 0) {
+      return {
+        reply: rawReply.trim(),
+        products,
+        ...(recommendation ? { recommendation } : {}),
+        intent,
+        sessionId: resolvedSessionId,
+      };
+    }
+  }
+
+  // Fallback for valid plain text non-HTML response
+  if (parsed === null && !trimmedRaw.startsWith('<')) {
+    return {
+      reply: trimmedRaw,
+      products: [],
+      intent: 'n8n_agent',
+      sessionId,
+    };
+  }
+
+  return null;
+}
+
+async function verifyTurnstileToken(token: string, secretKey: string, remoteIp?: string | null): Promise<boolean> {
+  try {
+    const form = new URLSearchParams();
+    form.set('secret', secretKey);
+    form.set('response', token);
+    if (remoteIp) form.set('remoteip', remoteIp);
+
+    const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return false;
+    const outcome: any = await res.json();
+    return Boolean(outcome?.success);
+  } catch {
+    return false;
+  }
+}
+
 async function handleChat(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') {
     return errorJson('Method not allowed for /chat. Use POST', 405, request);
+  }
+
+  // Preserve production Firebase Authentication enforcement on /chat
+  const authResult = await authenticateUser(request, env);
+  if (!authResult.allowed || !authResult.user) {
+    return json(
+      {
+        ok: false,
+        success: false,
+        error: {
+          code: authResult.code || 'UNAUTHORIZED',
+          message: authResult.message || 'سجّل الدخول إلى Enerjoo ثم أعد المحاولة.',
+        },
+      },
+      authResult.status || 401,
+      request
+    );
   }
 
   let body: any = {};
   try {
     body = await request.json();
   } catch {
-    return errorJson('Invalid JSON payload in request body', 400, request);
+    return errorJson('صيغة الطلب غير صالحة (JSON).', 400, request);
+  }
+
+  // Optional / Configured Cloudflare Turnstile validation
+  const turnstileToken = typeof body.turnstileToken === 'string' ? body.turnstileToken.trim() : '';
+  if (env.TURNSTILE_SECRET_KEY && (turnstileToken || String(env.REQUIRE_TURNSTILE || '').toLowerCase() === 'true')) {
+    if (!turnstileToken) {
+      return json(
+        {
+          ok: false,
+          success: false,
+          error: {
+            code: 'TURNSTILE_REQUIRED',
+            message: 'يرجى إتمام التحقق الأمني (Turnstile) ثم إعادة المحاولة.',
+          },
+        },
+        403,
+        request
+      );
+    }
+    const cfIp = request.headers.get('CF-Connecting-IP');
+    const turnstileOk = await verifyTurnstileToken(turnstileToken, env.TURNSTILE_SECRET_KEY, cfIp);
+    if (!turnstileOk) {
+      return json(
+        {
+          ok: false,
+          success: false,
+          error: {
+            code: 'TURNSTILE_FAILED',
+            message: 'فشل التحقق الأمني. يرجى تحديث الصفحة والمحاولة مرة أخرى.',
+          },
+        },
+        403,
+        request
+      );
+    }
   }
 
   const rawMessage = (body.message || body.chatInput || '').trim();
@@ -1148,77 +1336,163 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
 
   const safeMessages: Array<{ role: 'user' | 'assistant'; content: string }> = rawMessages
     .filter(m => m && typeof (m.content || m.text) === 'string' && (m.role === 'user' || m.role === 'assistant'))
-    .slice(-8)
+    .slice(-10)
     .map(m => ({
       role: m.role as 'user' | 'assistant',
       content: String(m.content || m.text)
         .replace(/(?:ignore all previous instructions|system prompt|jailbreak|developer mode)/gi, '')
-        .slice(0, 1000)
+        .slice(0, 1500)
     }));
 
   const userQuery = rawMessage || (safeMessages.length > 0 ? safeMessages[safeMessages.length - 1].content : '');
+  if (!userQuery) {
+    return json(
+      {
+        ok: false,
+        success: false,
+        error: {
+          code: 'EMPTY_MESSAGE',
+          message: 'يرجى كتابة رسالتك أولاً قبل الإرسال.',
+        },
+      },
+      400,
+      request
+    );
+  }
 
-  // Customer Session Isolation: Never share 'session-default' across distinct users!
+  // Keep client sessionId strictly stable throughout the conversation
   let sessionId = (body.sessionId || body.session_id || '').trim();
   if (!sessionId || sessionId === 'session-default') {
-    const authUser = await optionalAuthenticateUser(request, env);
-    sessionId = authUser ? `user-${authUser.uid}` : `guest-${crypto.randomUUID()}`;
+    sessionId = `user-${authResult.user.uid}`;
   }
 
-  // 1. Primary: Forward to n8n Cloud Production Webhook
-  try {
-    const n8nPayload = {
-      message: userQuery,
-      sessionId,
-      history: safeMessages,
-      selectedProductIds: body.selectedProductIds || [],
-    };
+  const messageId =
+    typeof body.messageId === 'string' && body.messageId.trim()
+      ? body.messageId.trim()
+      : `msg-${Date.now()}`;
 
-    const n8nRes = await fetch(N8N_CHAT_WEBHOOK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*',
-      },
-      body: JSON.stringify(n8nPayload),
-      signal: AbortSignal.timeout(12000),
-    });
+  const selectedProductIds = Array.isArray(body.selectedProductIds)
+    ? body.selectedProductIds.filter((id: unknown) => typeof id === 'string' && id.trim().length > 0)
+    : [];
 
-    if (n8nRes.ok) {
-      const n8nRawText = await n8nRes.text();
-      let n8nJson: any = null;
-      try {
-        n8nJson = JSON.parse(n8nRawText);
-      } catch {
-        // Raw text response
+  // Route active chat exclusively to n8n Production Webhook when N8N_CHAT_ENABLED=true
+  const isN8nEnabled = String(env.N8N_CHAT_ENABLED ?? 'true').trim().toLowerCase() === 'true';
+
+  if (isN8nEnabled) {
+    const n8nWebhookUrl = (env.N8N_WEBHOOK_URL || DEFAULT_N8N_PRODUCTION_WEBHOOK_URL).trim();
+
+    if (!env.ENERJOO_N8N_SECRET || !env.ENERJOO_N8N_SECRET.trim()) {
+      console.error('[handleChat] Missing ENERJOO_N8N_SECRET configuration in Worker environment.');
+      return json(
+        {
+          ok: false,
+          success: false,
+          error: {
+            code: 'N8N_CONFIG_ERROR',
+            message: 'خدمة المساعد الذكي غير مهيأة حالياً. يرجى المحاولة لاحقاً.',
+          },
+        },
+        503,
+        request
+      );
+    }
+
+    try {
+      const n8nPayload = {
+        message: userQuery,
+        chatInput: userQuery,
+        sessionId,
+        messageId,
+        history: safeMessages,
+        selectedProductIds,
+        turnstileToken,
+        userId: authResult.user.uid,
+      };
+
+      const n8nRes = await fetch(n8nWebhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/plain, */*',
+          'X-Enerjoo-Key': env.ENERJOO_N8N_SECRET.trim(),
+        },
+        body: JSON.stringify(n8nPayload),
+        signal: AbortSignal.timeout(25000),
+      });
+
+      const n8nRawText = await n8nRes.text().catch(() => '');
+
+      if (!n8nRes.ok) {
+        console.error(`[handleChat] n8n upstream returned HTTP ${n8nRes.status} for session=${sessionId.slice(0, 12)}`);
+        const clientStatus = n8nRes.status === 404 ? 502 : n8nRes.status >= 500 ? 502 : 502;
+        return json(
+          {
+            ok: false,
+            success: false,
+            error: {
+              code: 'AI_AGENT_UPSTREAM_ERROR',
+              message: 'تعذر الحصول على رد من المساعد الذكي حالياً. يرجى المحاولة مرة أخرى بعد لحظات.',
+            },
+          },
+          clientStatus,
+          request
+        );
       }
 
-      const item = Array.isArray(n8nJson) ? n8nJson[0] : n8nJson;
-      const reply =
-        item?.output ||
-        item?.reply ||
-        item?.text ||
-        item?.response ||
-        item?.message ||
-        (typeof item === 'string' ? item : (typeof n8nJson === 'string' ? n8nJson : n8nRawText));
+      const normalized = normalizeN8nChatResponse(n8nRawText, sessionId);
+      if (!normalized) {
+        console.error(`[handleChat] n8n upstream returned empty/malformed response for session=${sessionId.slice(0, 12)}`);
+        return json(
+          {
+            ok: false,
+            success: false,
+            error: {
+              code: 'AI_AGENT_EMPTY_RESPONSE',
+              message: 'لم يصل رد واضح من المساعد الذكي. من فضلك جرب إرسال رسالتك مرة أخرى.',
+            },
+          },
+          502,
+          request
+        );
+      }
 
-      if (reply && typeof reply === 'string' && reply.trim().length > 0) {
-        return json({
+      return json(
+        {
           ok: true,
           success: true,
-          reply: reply.trim(),
-          products: item?.products || item?.matchedProducts || [],
-          intent: item?.intent || 'n8n_agent',
-          source: 'n8n_cloud',
-          sessionId,
-        }, 200, request);
-      }
+          reply: normalized.reply,
+          products: normalized.products,
+          ...(normalized.recommendation ? { recommendation: normalized.recommendation } : {}),
+          intent: normalized.intent,
+          source: 'n8n_agent',
+          sessionId: normalized.sessionId,
+        },
+        200,
+        request
+      );
+    } catch (n8nErr: any) {
+      const isTimeout = n8nErr?.name === 'TimeoutError' || n8nErr?.name === 'AbortError';
+      console.error(
+        `[handleChat] n8n upstream ${isTimeout ? 'timeout' : 'connection error'} for session=${sessionId.slice(0, 12)}`
+      );
+      return json(
+        {
+          ok: false,
+          success: false,
+          error: {
+            code: isTimeout ? 'AI_AGENT_TIMEOUT' : 'AI_AGENT_UNREACHABLE',
+            message: isTimeout
+              ? 'استغرق المساعد الذكي وقتاً أطول من المعتاد. يرجى إعادة المحاولة.'
+              : 'تعذر الاتصال بالمساعد الذكي حالياً. يرجى المحاولة مرة أخرى بعد لحظات.',
+          },
+        },
+        isTimeout ? 504 : 502,
+        request
+      );
     }
-  } catch (n8nErr) {
-    console.warn('[handleChat] n8n webhook connection warning, falling back to consultant:', n8nErr);
   }
 
-  // 2. Resilient Fallback: Enerjoo Solar Consultant Engine with Cloudflare D1 Catalog
+  // Preserved Legacy Rollback Engine (only active when N8N_CHAT_ENABLED=false)
   let rawProducts: RawCatalogProduct[] = [];
   try {
     const { results } = await env.DB.prepare(
