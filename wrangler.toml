@@ -1,11 +1,12 @@
 name = "enerjoo-api"
 main = "worker/index.ts"
 compatibility_date = "2024-09-01"
+account_id = "986b56095d0e6d9fa721e8c1f3597db7"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "enerjoo"
-database_id = "enerjoo"
+database_id = "9aec7acb-b339-4151-a77c-9768da92f98c"
 
 [ai]
 binding = "AI"

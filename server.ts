@@ -3068,16 +3068,53 @@ ${urls.join("\n")}
   });
 
   // Centralized Solar Panel Energy Exchange Endpoints (Cloudflare D1 SSoT + Google AI Studio Preview Fallback)
-  const EXCHANGE_FILE = path.join(process.cwd(), "energy-exchange.json");
   const RANGES_PREVIEW_FILE = path.join(process.cwd(), "energy-exchange-ranges.json");
 
-  // Determine strictly if current runtime is Google AI Studio Preview environment
+  const APPROVED_EXCHANGE_BRANDS = [
+    "Jinko",
+    "LONGi Solar",
+    "AIKO",
+    "Trina Solar",
+    "JA Solar",
+    "Risen",
+    "GCL",
+    "Suntech",
+    "Astronergy",
+    "Gokin",
+    "Quantum Solar",
+    "Ulica Solar",
+    "ZNShine Solar",
+    "Jet Solar",
+  ] as const;
+
+  function resolveApprovedExchangeBrand(rawBrand?: string): { valid: boolean; brand?: string; error?: string } {
+    const trimmed = (rawBrand || "").trim();
+    if (!trimmed) {
+      return { valid: false, error: "اسم العلامة التجارية مطلوب." };
+    }
+    if (trimmed.toLowerCase() === "gate solar" || trimmed.toLowerCase() === "gatesolar") {
+      return { valid: false, error: "العلامة التجارية غير معتمدة. الاسم الصحيح هو Jet Solar." };
+    }
+    const canonical = APPROVED_EXCHANGE_BRANDS.find((b) => b.toLowerCase() === trimmed.toLowerCase());
+    if (!canonical) {
+      return {
+        valid: false,
+        error: `العلامة التجارية "${trimmed}" غير مدرجة ضمن الماركات الـ 14 المعتمدة في بورصة الطاقة.`,
+      };
+    }
+    return { valid: true, brand: canonical };
+  }
+
+  // Determine strictly if current runtime is Google AI Studio Preview environment (never active in production)
   function isGoogleAiStudioPreviewEnvironment(): boolean {
+    if (process.env.NODE_ENV === "production" && !process.env.APPLET_ID && !process.env.GOOGLE_RUNTIME) {
+      return false;
+    }
     return Boolean(
       process.env.APPLET_ID ||
-      process.env.GOOGLE_RUNTIME ||
-      (process.env.APP_URL && process.env.APP_URL.includes(".run.app")) ||
-      process.env.NODE_ENV !== "production"
+        process.env.GOOGLE_RUNTIME ||
+        (process.env.APP_URL && process.env.APP_URL.includes(".run.app")) ||
+        process.env.NODE_ENV === "development"
     );
   }
 
@@ -3090,12 +3127,13 @@ ${urls.join("\n")}
     currency: string;
     min_wattage?: number | null;
     max_wattage?: number | null;
+    is_active?: number;
     effective_date?: string;
     updated_at?: string;
     updated_by?: string;
   }
 
-  // Mutex queue to guarantee atomic sequential writes during concurrent requests
+  // Mutex queue to guarantee atomic sequential writes during concurrent preview requests
   let previewFileWriteLock = Promise.resolve();
 
   function loadPreviewRangesFromFile(): EnergyExchangePreviewRecord[] {
@@ -3103,59 +3141,42 @@ ${urls.join("\n")}
       if (fs.existsSync(RANGES_PREVIEW_FILE)) {
         const raw = fs.readFileSync(RANGES_PREVIEW_FILE, "utf-8");
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.warn("Could not load energy-exchange-ranges.json, falling back to legacy migration:", e);
-    }
-
-    // Convert existing legacy prices from energy-exchange.json without inventing any wattage ranges
-    const legacyRecords: EnergyExchangePreviewRecord[] = [];
-    try {
-      if (fs.existsSync(EXCHANGE_FILE)) {
-        const legacyData = JSON.parse(fs.readFileSync(EXCHANGE_FILE, "utf-8"));
-        if (legacyData && typeof legacyData === "object") {
-          for (const [brand, price] of Object.entries(legacyData)) {
-            const numPrice = Number(price);
-            if (brand && Number.isFinite(numPrice) && numPrice > 0) {
-              const cleanBrand = brand.trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
-              legacyRecords.push({
-                price_id: `PRICE_PANEL_${cleanBrand}`,
-                category: "panels",
-                brand: brand.trim(),
-                product_type: "Solar Panel",
-                price_per_watt: parseFloat(numPrice.toFixed(2)),
-                currency: "EGP",
-                min_wattage: null,
-                max_wattage: null,
-                effective_date: "2025-01-01",
-                updated_at: new Date().toISOString(),
-                updated_by: "system_legacy"
-              });
-            }
-          }
+        if (Array.isArray(parsed)) {
+          return parsed
+            .filter((r) => r && typeof r.brand === "string" && r.brand.trim().toLowerCase() !== "gate solar")
+            .map((r) => ({
+              ...r,
+              is_active: r.is_active === undefined || r.is_active === null ? 1 : Number(r.is_active) === 0 ? 0 : 1,
+            }));
         }
       }
     } catch (e) {
-      console.warn("Could not load legacy energy-exchange.json:", e);
+      console.warn("Could not load energy-exchange-ranges.json:", e);
     }
+    return [];
+  }
 
-    if (legacyRecords.length > 0 && !fs.existsSync(RANGES_PREVIEW_FILE)) {
-      try {
-        fs.writeFileSync(RANGES_PREVIEW_FILE, JSON.stringify(legacyRecords, null, 2), "utf-8");
-      } catch (err) {
-        console.warn("Could not initialize energy-exchange-ranges.json:", err);
+  function computePreviewLastUpdatedAt(records: EnergyExchangePreviewRecord[]): string | null {
+    let latestMs = 0;
+    let latestStr: string | null = null;
+    for (const r of records) {
+      if (!r?.updated_at) continue;
+      const ms = Date.parse(r.updated_at);
+      if (!isNaN(ms) && ms > latestMs) {
+        latestMs = ms;
+        latestStr = r.updated_at;
       }
     }
-
-    return legacyRecords;
+    return latestStr;
   }
 
   function getExchangePricesMap(): Record<string, number> {
+    if (!isGoogleAiStudioPreviewEnvironment()) return {};
     const records = loadPreviewRangesFromFile();
     const map: Record<string, number> = {};
     for (const r of records) {
-      if (r.brand && typeof r.price_per_watt === "number") {
+      if (r.is_active === 0) continue;
+      if (r.brand && typeof r.price_per_watt === "number" && r.price_per_watt > 0 && map[r.brand] === undefined) {
         map[r.brand] = r.price_per_watt;
       }
     }
@@ -3163,44 +3184,59 @@ ${urls.join("\n")}
   }
 
   async function atomicSavePreviewRangesToFile(records: EnergyExchangePreviewRecord[]): Promise<void> {
-    previewFileWriteLock = previewFileWriteLock.then(() => {
-      const tempPath = `${RANGES_PREVIEW_FILE}.tmp.${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const payload = JSON.stringify(records, null, 2);
-      fs.writeFileSync(tempPath, payload, "utf-8");
-      fs.renameSync(tempPath, RANGES_PREVIEW_FILE);
-    }).catch(err => {
-      console.error("Atomic write error in energy-exchange-ranges.json:", err);
-      throw err;
-    });
+    previewFileWriteLock = previewFileWriteLock
+      .then(() => {
+        const tempPath = `${RANGES_PREVIEW_FILE}.tmp.${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        const payload = JSON.stringify(records, null, 2);
+        fs.writeFileSync(tempPath, payload, "utf-8");
+        fs.renameSync(tempPath, RANGES_PREVIEW_FILE);
+      })
+      .catch((err) => {
+        console.error("Atomic write error in energy-exchange-ranges.json:", err);
+        throw err;
+      });
     return previewFileWriteLock;
   }
 
   // Authoritative server-side admin check relying purely on cryptographic Firebase token verification
-  async function isEnergyExchangeAdminAuthorizedServer(req: express.Request): Promise<{ authorized: boolean; email?: string; message?: string }> {
+  async function isEnergyExchangeAdminAuthorizedServer(
+    req: express.Request
+  ): Promise<{ authorized: boolean; status: number; code: string; email?: string; message?: string }> {
     const authHeader = extractBearerAuthHeader(req);
     if (!authHeader) {
-      return { authorized: false, message: "رمز المصادقة مطلوب. سجّل الدخول بحساب مسؤول ثم أعد المحاولة." };
+      return {
+        authorized: false,
+        status: 401,
+        code: "UNAUTHORIZED",
+        message: "رمز المصادقة مطلوب. سجّل الدخول بحساب مسؤول ثم أعد المحاولة.",
+      };
     }
 
     const authRes = await verifyAuthorizedProductPublisher(authHeader, true);
     if (!authRes.allowed || authRes.role !== "admin") {
-      return { authorized: false, message: authRes.message || "عذراً، تعديل بورصة الطاقة مخصص للمسؤولين المعتمدين فقط." };
+      return {
+        authorized: false,
+        status: authRes.status || 403,
+        code: authRes.code || "FORBIDDEN",
+        message: authRes.message || "عذراً، تعديل بورصة الطاقة مخصص للمسؤولين المعتمدين فقط.",
+      };
     }
 
-    return { authorized: true, email: authRes.email || "admin" };
+    return { authorized: true, status: 200, code: "OK", email: authRes.email || "admin" };
   }
 
   // GET /api/energy-exchange, /api/energy-exchange/prices, /api/energy-exchange/ranges
-  app.get(["/api/energy-exchange", "/api/energy-exchange/prices", "/api/energy-exchange/ranges", "/energy-exchange/prices"], async (req, res) => {
+  app.get(["/api/energy-exchange", "/api/energy-exchange/prices", "/api/energy-exchange/ranges", "/energy-exchange/prices"], async (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
     res.setHeader("Surrogate-Control", "no-store");
 
-    // 1. Attempt reading from remote Cloudflare Worker D1
+    // 1. Attempt reading from remote Cloudflare Worker D1 (Single Source of Truth)
+    let isWorker404 = false;
     try {
       const cfRes = await fetch(`${CF_WORKER_API}/energy-exchange/prices`, {
-        signal: AbortSignal.timeout(3500)
+        signal: AbortSignal.timeout(4000),
       });
 
       if (cfRes.ok) {
@@ -3208,51 +3244,318 @@ ${urls.join("\n")}
         return res.json({
           ...cfData,
           source: "cloudflare-d1",
-          is_preview: false
+          is_preview: false,
         });
       }
 
-      // If remote returned anything other than 404 (e.g. 500, 403), do not mask it unless 404
-      if (cfRes.status !== 404) {
+      if (cfRes.status === 404) {
+        isWorker404 = true;
+      } else {
         const text = await cfRes.text();
         return res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(text);
       }
     } catch {
-      // Remote worker offline, timeout, or unreachable
-    }
-
-    // 2. If Cloudflare Worker route is 404, verify Preview environment
-    if (!isGoogleAiStudioPreviewEnvironment()) {
+      // Never silently serve local JSON when Worker network request fails
       return res.status(503).json({
         success: false,
         ok: false,
         error: {
           code: "SERVICE_UNAVAILABLE",
-          message: "مسار بورصة الطاقة السحابي غير متاح، والـ Local Fallback مخصص لبيئة المعاينة فقط."
-        }
+          message: "تعذر الاتصال بخادم بورصة الطاقة السحابي (Cloudflare D1). يرجى المحاولة مرة أخرى.",
+        },
       });
     }
 
-    // 3. Serve strictly from consistent Preview Local Storage
+    // 2. Local Preview Fallback strictly upon confirmed Worker 404 inside AI Studio Preview
+    if (!isWorker404 || !isGoogleAiStudioPreviewEnvironment()) {
+      return res.status(503).json({
+        success: false,
+        ok: false,
+        error: {
+          code: "SERVICE_UNAVAILABLE",
+          message: "مسار بورصة الطاقة السحابي غير متاح، والـ Local Fallback مخصص لبيئة المعاينة فقط.",
+        },
+      });
+    }
+
     const localRecords = loadPreviewRangesFromFile();
     const pricesMap: Record<string, number> = {};
     for (const r of localRecords) {
-      if (r.brand && typeof r.price_per_watt === "number") {
-        pricesMap[r.brand] = r.price_per_watt;
+      if (r.is_active === 0) continue;
+      if (r.brand && typeof r.price_per_watt === "number" && r.price_per_watt > 0) {
+        if (pricesMap[r.brand] === undefined) {
+          pricesMap[r.brand] = r.price_per_watt;
+        }
       }
     }
+
+    const lastUpdatedAt = computePreviewLastUpdatedAt(localRecords);
 
     return res.json({
       success: true,
       ok: true,
       count: localRecords.length,
+      approved_brands: APPROVED_EXCHANGE_BRANDS,
       prices: pricesMap,
       data: localRecords,
       records: localRecords,
+      last_updated_at: lastUpdatedAt,
       source: "preview-local",
       is_preview: true,
-      updatedAt: new Date().toISOString()
     });
+  });
+
+  // GET /api/energy-exchange/prices/:id, /api/energy-exchange/ranges/:id
+  app.get(["/api/energy-exchange/prices/:id", "/api/energy-exchange/ranges/:id"], async (req, res) => {
+    const targetId = req.params.id;
+    let isWorker404 = false;
+    try {
+      const cfRes = await fetch(`${CF_WORKER_API}/energy-exchange/prices/${encodeURIComponent(targetId)}`, {
+        signal: AbortSignal.timeout(4000),
+      });
+      if (cfRes.ok) {
+        const cfData: any = await cfRes.json();
+        return res.json({ ...cfData, source: "cloudflare-d1", is_preview: false });
+      }
+      if (cfRes.status === 404) {
+        isWorker404 = true;
+      } else {
+        const text = await cfRes.text();
+        return res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(text);
+      }
+    } catch {
+      return res.status(503).json({
+        success: false,
+        ok: false,
+        error: { code: "SERVICE_UNAVAILABLE", message: "تعذر الاتصال بخادم بورصة الطاقة السحابي." },
+      });
+    }
+
+    if (!isWorker404 || !isGoogleAiStudioPreviewEnvironment()) {
+      return res.status(404).json({ success: false, ok: false, error: { code: "NOT_FOUND", message: "Price record not found" } });
+    }
+
+    const localRecords = loadPreviewRangesFromFile();
+    const match = localRecords.find((r) => r.price_id === targetId || r.brand.toLowerCase() === decodeURIComponent(targetId).toLowerCase());
+    if (!match) {
+      return res.status(404).json({ success: false, ok: false, error: { code: "NOT_FOUND", message: "Price record not found" } });
+    }
+    return res.json({ success: true, ok: true, price: match, data: match, source: "preview-local", is_preview: true });
+  });
+
+  // PUT / PATCH /api/energy-exchange/brands/:brand (Atomic Brand Range Sync & Activation Toggle)
+  app.all("/api/energy-exchange/brands/:brand", async (req, res) => {
+    try {
+      const method = req.method.toUpperCase();
+      if (method !== "PUT" && method !== "PATCH") {
+        return res.status(405).json({ success: false, ok: false, error: `Method ${method} not allowed` });
+      }
+
+      const rawBrandParam = decodeURIComponent(req.params.brand || "");
+      const authCheck = await isEnergyExchangeAdminAuthorizedServer(req);
+      if (!authCheck.authorized) {
+        return res.status(authCheck.status).json({
+          success: false,
+          ok: false,
+          error: { code: authCheck.code, message: authCheck.message },
+        });
+      }
+
+      // 1. Try remote Cloudflare Worker
+      let isWorker404 = false;
+      const authHeader = extractBearerAuthHeader(req);
+      try {
+        const cfRes = await fetch(`${CF_WORKER_API}/energy-exchange/brands/${encodeURIComponent(rawBrandParam)}`, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            Origin: "https://enerjoo.com",
+            ...(authHeader ? { Authorization: authHeader } : {}),
+          },
+          body: JSON.stringify(req.body || {}),
+          signal: AbortSignal.timeout(5000),
+        });
+
+        if (cfRes.status === 404) {
+          isWorker404 = true;
+        } else {
+          const text = await cfRes.text();
+          return res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(text);
+        }
+      } catch {
+        return res.status(503).json({
+          success: false,
+          ok: false,
+          error: {
+            code: "SERVICE_UNAVAILABLE",
+            message: "تعذر الاتصال بالخادم السحابي (مهلة زمنية أو انقطاع شبكة). لم يتم تنفيذ التحديث لتجنب تعارض البيانات.",
+          },
+        });
+      }
+
+      if (!isWorker404 || !isGoogleAiStudioPreviewEnvironment()) {
+        return res.status(503).json({
+          success: false,
+          ok: false,
+          error: { code: "SERVICE_UNAVAILABLE", message: "مسار تحديث العلامة السحابي غير متاح." },
+        });
+      }
+
+      const brandRes = resolveApprovedExchangeBrand(rawBrandParam);
+      if (!brandRes.valid || !brandRes.brand) {
+        return res.status(400).json({
+          success: false,
+          ok: false,
+          error: { code: "INVALID_BRAND", message: brandRes.error },
+        });
+      }
+      const canonicalBrand = brandRes.brand;
+      const body = req.body || {};
+
+      // Preview Mode 1: Activation Toggle (PATCH without ranges)
+      if (method === "PATCH" && !Array.isArray(body.ranges)) {
+        if (body.is_active === undefined && body.isActive === undefined) {
+          return res.status(400).json({ success: false, ok: false, error: { code: "MISSING_ACTIVE", message: "Missing is_active boolean flag" } });
+        }
+        const activeFlag = body.is_active === false || body.is_active === 0 || body.isActive === false ? 0 : 1;
+        const records = loadPreviewRangesFromFile();
+        const matching = records.filter((r) => r.brand.toLowerCase() === canonicalBrand.toLowerCase());
+        if (matching.length === 0) {
+          return res.status(400).json({
+            success: false,
+            ok: false,
+            error: {
+              code: "BRAND_UNCONFIGURED",
+              message: `لا يمكن تغيير حالة التفعيل قبل إضافة نطاق قدرة واحد على الأقل لعلامة ${canonicalBrand}.`,
+            },
+          });
+        }
+        const nowIso = new Date().toISOString();
+        for (const r of matching) {
+          r.is_active = activeFlag;
+          r.updated_at = nowIso;
+          r.updated_by = authCheck.email || "admin";
+        }
+        await atomicSavePreviewRangesToFile(records);
+        return res.json({
+          success: true,
+          ok: true,
+          message: activeFlag === 1 ? `تم تفعيل علامة ${canonicalBrand} (معاينة)` : `تم إيقاف علامة ${canonicalBrand} مؤقتاً (معاينة)`,
+          brand: canonicalBrand,
+          is_active: activeFlag,
+          source: "preview-local",
+          is_preview: true,
+        });
+      }
+
+      // Preview Mode 2: Atomic Range Replacement
+      const rawRanges = body.ranges;
+      if (!Array.isArray(rawRanges) || rawRanges.length < 1) {
+        return res.status(400).json({
+          success: false,
+          ok: false,
+          error: { code: "MIN_RANGE_REQUIRED", message: "يجب تحديد نطاق قدرة واحد على الأقل للعلامة التجارية." },
+        });
+      }
+      if (rawRanges.length > 3) {
+        return res.status(400).json({
+          success: false,
+          ok: false,
+          error: { code: "MAX_RANGES_EXCEEDED", message: `الحد الأقصى للنطاقات هو 3 نطاقات لكل علامة تجارية (${canonicalBrand}).` },
+        });
+      }
+
+      const nowIso = new Date().toISOString();
+      const todayDate = nowIso.split("T")[0];
+      const activeFlag = body.is_active === false || body.is_active === 0 || body.isActive === false ? 0 : 1;
+      const cleanBrand = canonicalBrand.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+      const newBrandRecords: EnergyExchangePreviewRecord[] = [];
+      const seenIds = new Set<string>();
+
+      for (let i = 0; i < rawRanges.length; i++) {
+        const item = rawRanges[i] || {};
+        const minW = Number(item.min_wattage ?? item.minWattage);
+        const maxW = Number(item.max_wattage ?? item.maxWattage);
+        const rawPrice = Number(item.price_per_watt ?? item.pricePerWatt);
+
+        if (!Number.isInteger(minW) || minW <= 0 || !Number.isInteger(maxW) || minW >= maxW) {
+          return res.status(400).json({
+            success: false,
+            ok: false,
+            error: {
+              code: "INVALID_RANGE",
+              message: `النطاق ${i + 1}: يجب أن يكون الحد الأدنى رقماً صحيحاً > 0 وأقل تماماً من الحد الأقصى.`,
+            },
+          });
+        }
+        if (!Number.isFinite(rawPrice) || rawPrice <= 0 || rawPrice > 200) {
+          return res.status(400).json({
+            success: false,
+            ok: false,
+            error: {
+              code: "INVALID_PRICE",
+              message: `النطاق ${i + 1}: يرجى إدخال سعر وات صحيح بين 0.1 و 200 ج.م.`,
+            },
+          });
+        }
+
+        let priceId = `RANGE_${cleanBrand}_${minW}_${maxW}`;
+        if (seenIds.has(priceId)) priceId = `${priceId}_${i + 1}`;
+        seenIds.add(priceId);
+
+        newBrandRecords.push({
+          price_id: priceId,
+          category: "panels",
+          brand: canonicalBrand,
+          product_type: "Solar Panel",
+          price_per_watt: parseFloat(rawPrice.toFixed(2)),
+          currency: "EGP",
+          min_wattage: minW,
+          max_wattage: maxW,
+          is_active: activeFlag,
+          effective_date: todayDate,
+          updated_at: nowIso,
+          updated_by: authCheck.email || "admin",
+        });
+      }
+
+      for (let i = 0; i < newBrandRecords.length; i++) {
+        for (let j = i + 1; j < newBrandRecords.length; j++) {
+          const a = newBrandRecords[i];
+          const b = newBrandRecords[j];
+          if (a.min_wattage! <= b.max_wattage! && a.max_wattage! >= b.min_wattage!) {
+            return res.status(409).json({
+              success: false,
+              ok: false,
+              error: {
+                code: "RANGE_OVERLAP",
+                message: `تعذر الحفظ: نطاق القدرة (${a.min_wattage} - ${a.max_wattage} وات) يتداخل مع النطاق (${b.min_wattage} - ${b.max_wattage} وات) لماركة ${canonicalBrand}.`,
+              },
+            });
+          }
+        }
+      }
+
+      const existingAll = loadPreviewRangesFromFile();
+      const filteredOthers = existingAll.filter((r) => r.brand.toLowerCase() !== canonicalBrand.toLowerCase());
+      const updatedAll = [...filteredOthers, ...newBrandRecords];
+      await atomicSavePreviewRangesToFile(updatedAll);
+
+      return res.json({
+        success: true,
+        ok: true,
+        message: `تم حفظ نطاقات وأسعار علامة ${canonicalBrand} بنجاح (معاينة)`,
+        brand: canonicalBrand,
+        is_active: activeFlag,
+        count: newBrandRecords.length,
+        ranges: newBrandRecords,
+        source: "preview-local",
+        is_preview: true,
+      });
+    } catch (err: any) {
+      console.error("Error in /api/energy-exchange/brands/:brand:", err);
+      res.status(500).json({ success: false, error: "Failed to sync brand ranges" });
+    }
   });
 
   // DELETE /api/energy-exchange/prices/:id, /api/energy-exchange/ranges/:id
@@ -3263,10 +3566,10 @@ ${urls.join("\n")}
       // Authoritative Admin RBAC check
       const authCheck = await isEnergyExchangeAdminAuthorizedServer(req);
       if (!authCheck.authorized) {
-        return res.status(403).json({
+        return res.status(authCheck.status).json({
           success: false,
           ok: false,
-          error: { code: "FORBIDDEN", message: authCheck.message }
+          error: { code: authCheck.code, message: authCheck.message },
         });
       }
 
@@ -3277,10 +3580,10 @@ ${urls.join("\n")}
         const cfRes = await fetch(`${CF_WORKER_API}/energy-exchange/prices/${encodeURIComponent(targetId)}`, {
           method: "DELETE",
           headers: {
-            "Origin": "https://enerjoo.com",
-            ...(authHeader ? { "Authorization": authHeader } : {})
+            Origin: "https://enerjoo.com",
+            ...(authHeader ? { Authorization: authHeader } : {}),
           },
-          signal: AbortSignal.timeout(5000)
+          signal: AbortSignal.timeout(5000),
         });
 
         if (cfRes.status === 404) {
@@ -3289,33 +3592,28 @@ ${urls.join("\n")}
           const data = await cfRes.text();
           return res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(data);
         }
-      } catch (netErr: any) {
-        // Network timeout / connection error: DO NOT fallback locally to prevent split-brain
+      } catch {
         return res.status(503).json({
           success: false,
           ok: false,
           error: {
             code: "SERVICE_UNAVAILABLE",
-            message: "تعذر الاتصال بالخادم السحابي (مهلة زمنية أو انقطاع شبكة). لم يتم تنفيذ الحذف لتجنب تعارض البيانات."
-          }
+            message: "تعذر الاتصال بالخادم السحابي (مهلة زمنية أو انقطاع شبكة). لم يتم تنفيذ الحذف لتجنب تعارض البيانات.",
+          },
         });
       }
 
       // 2. Local Preview Fallback strictly upon confirmed Worker 404
-      if (!isWorker404) {
-        return res.status(500).json({ success: false, error: "Unexpected routing state" });
-      }
-
-      if (!isGoogleAiStudioPreviewEnvironment()) {
+      if (!isWorker404 || !isGoogleAiStudioPreviewEnvironment()) {
         return res.status(503).json({
           success: false,
           ok: false,
-          error: { code: "SERVICE_UNAVAILABLE", message: "مسار الحذف السحابي غير متاح، والـ Fallback مخصص للمعاينة فقط." }
+          error: { code: "SERVICE_UNAVAILABLE", message: "مسار الحذف السحابي غير متاح، والـ Fallback مخصص للمعاينة فقط." },
         });
       }
 
       const records = loadPreviewRangesFromFile();
-      const targetIndex = records.findIndex(r => r.price_id === targetId);
+      const targetIndex = records.findIndex((r) => r.price_id === targetId);
       if (targetIndex === -1) {
         return res.json({
           success: true,
@@ -3323,22 +3621,21 @@ ${urls.join("\n")}
           message: "السجل غير موجود أو تم حذفه سابقاً",
           deleted_id: targetId,
           source: "preview-local",
-          is_preview: true
+          is_preview: true,
         });
       }
 
       const targetBrand = records[targetIndex].brand;
-      const brandRemainingRanges = records.filter(r => r.brand.toLowerCase() === targetBrand.toLowerCase());
+      const brandRemainingRanges = records.filter((r) => r.brand.toLowerCase() === targetBrand.toLowerCase());
 
-      // Rule: Prevent deleting the only remaining range/record for a brand
       if (brandRemainingRanges.length <= 1) {
         return res.status(400).json({
           success: false,
           ok: false,
           error: {
             code: "MIN_RANGE_REQUIRED",
-            message: `لا يمكن حذف النطاق الوحيد لماركة ${targetBrand}. يجب أن تحتوي العلامة التجارية على نطاق قدرة واحد على الأقل.`
-          }
+            message: `لا يمكن حذف النطاق الوحيد لماركة ${targetBrand}. النطاق الأول إجباري، ويمكنك تعديله أو إيقاف تفعيل البرند.`,
+          },
         });
       }
 
@@ -3352,7 +3649,7 @@ ${urls.join("\n")}
         deleted_id: targetId,
         brand: targetBrand,
         source: "preview-local",
-        is_preview: true
+        is_preview: true,
       });
     } catch (err: any) {
       console.error("Error in DELETE /api/energy-exchange/prices/:id:", err);
@@ -3368,10 +3665,10 @@ ${urls.join("\n")}
       // Authoritative Admin RBAC check
       const authCheck = await isEnergyExchangeAdminAuthorizedServer(req);
       if (!authCheck.authorized) {
-        return res.status(403).json({
+        return res.status(authCheck.status).json({
           success: false,
           ok: false,
-          error: { code: "FORBIDDEN", message: authCheck.message }
+          error: { code: authCheck.code, message: authCheck.message },
         });
       }
 
@@ -3385,11 +3682,11 @@ ${urls.join("\n")}
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
-            "Origin": "https://enerjoo.com",
-            ...(authHeader ? { "Authorization": authHeader } : {})
+            Origin: "https://enerjoo.com",
+            ...(authHeader ? { Authorization: authHeader } : {}),
           },
           body: JSON.stringify(req.body),
-          signal: AbortSignal.timeout(5000)
+          signal: AbortSignal.timeout(5000),
         });
 
         if (cfRes.status === 404) {
@@ -3398,27 +3695,23 @@ ${urls.join("\n")}
           const text = await cfRes.text();
           return res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(text);
         }
-      } catch (netErr: any) {
+      } catch {
         return res.status(503).json({
           success: false,
           ok: false,
           error: {
             code: "SERVICE_UNAVAILABLE",
-            message: "تعذر الاتصال بالخادم السحابي (مهلة زمنية أو انقطاع شبكة). لم يتم تنفيذ التعديل لتجنب تعارض البيانات."
-          }
+            message: "تعذر الاتصال بالخادم السحابي (مهلة زمنية أو انقطاع شبكة). لم يتم تنفيذ التعديل لتجنب تعارض البيانات.",
+          },
         });
       }
 
       // 2. Local Preview Fallback strictly upon confirmed Worker 404
-      if (!isWorker404) {
-        return res.status(500).json({ success: false, error: "Unexpected routing state" });
-      }
-
-      if (!isGoogleAiStudioPreviewEnvironment()) {
+      if (!isWorker404 || !isGoogleAiStudioPreviewEnvironment()) {
         return res.status(503).json({
           success: false,
           ok: false,
-          error: { code: "SERVICE_UNAVAILABLE", message: "مسار التعديل السحابي غير متاح، والـ Fallback مخصص للمعاينة فقط." }
+          error: { code: "SERVICE_UNAVAILABLE", message: "مسار التعديل السحابي غير متاح، والـ Fallback مخصص للمعاينة فقط." },
         });
       }
 
@@ -3427,42 +3720,56 @@ ${urls.join("\n")}
         return res.status(400).json({
           success: false,
           ok: false,
-          error: { code: "INVALID_PRICE", message: "يرجى إدخال سعر صحيح بالجنيه بين 0.1 و 200 لكل وات." }
+          error: { code: "INVALID_PRICE", message: "يرجى إدخال سعر صحيح بالجنيه بين 0.1 و 200 لكل وات." },
         });
       }
       const roundedPrice = parseFloat(rawPrice.toFixed(2));
 
       const records = loadPreviewRangesFromFile();
-      const existing = records.find(r => r.price_id === targetId || (brand && r.brand.toLowerCase() === brand.trim().toLowerCase() && r.min_wattage == null));
+      const existing = records.find(
+        (r) => r.price_id === targetId || (brand && r.brand.toLowerCase() === brand.trim().toLowerCase() && r.min_wattage == null)
+      );
       if (!existing) {
         return res.status(404).json({
           success: false,
           ok: false,
-          error: { code: "NOT_FOUND", message: `سجل السعر غير موجود: ${targetId}` }
+          error: { code: "NOT_FOUND", message: `سجل السعر غير موجود: ${targetId}` },
         });
       }
 
-      const effectiveBrand = (brand || existing.brand).trim();
+      const brandRes = resolveApprovedExchangeBrand(brand || existing.brand);
+      if (!brandRes.valid || !brandRes.brand) {
+        return res.status(400).json({
+          success: false,
+          ok: false,
+          error: { code: "INVALID_BRAND", message: brandRes.error },
+        });
+      }
+      const effectiveBrand = brandRes.brand;
+
       const minW = min_wattage !== undefined && min_wattage !== null ? Number(min_wattage) : existing.min_wattage;
       const maxW = max_wattage !== undefined && max_wattage !== null ? Number(max_wattage) : existing.max_wattage;
 
-      if (minW != null && maxW != null) {
-        if (minW <= 0 || maxW < minW) {
+      if (minW != null || maxW != null) {
+        if (minW == null || maxW == null || !Number.isInteger(minW) || !Number.isInteger(maxW) || minW <= 0 || minW >= maxW) {
           return res.status(400).json({
             success: false,
             ok: false,
-            error: { code: "INVALID_RANGE", message: "نطاق قدرة غير صالح: الحد الأدنى يجب أن يكون > 0 والحد الأقصى >= الحد الأدنى." }
+            error: {
+              code: "INVALID_RANGE",
+              message: "نطاق قدرة غير صالح: الحد الأدنى يجب أن يكون رقماً صحيحاً > 0 وأقل تماماً من الحد الأقصى.",
+            },
           });
         }
 
-        // Strict Overlap Prevention: exclude current target record
-        const overlap = records.find(r =>
-          r.price_id !== existing.price_id &&
-          r.brand.toLowerCase() === effectiveBrand.toLowerCase() &&
-          r.min_wattage != null &&
-          r.max_wattage != null &&
-          minW <= r.max_wattage &&
-          maxW >= r.min_wattage
+        const overlap = records.find(
+          (r) =>
+            r.price_id !== existing.price_id &&
+            r.brand.toLowerCase() === effectiveBrand.toLowerCase() &&
+            r.min_wattage != null &&
+            r.max_wattage != null &&
+            minW <= r.max_wattage &&
+            maxW >= r.min_wattage
         );
 
         if (overlap) {
@@ -3471,8 +3778,8 @@ ${urls.join("\n")}
             ok: false,
             error: {
               code: "RANGE_OVERLAP",
-              message: `تعذر التعديل: نطاق القدرة (${minW} - ${maxW} وات) يتداخل مع نطاق موجود (${overlap.min_wattage} - ${overlap.max_wattage} وات) لماركة ${effectiveBrand}.`
-            }
+              message: `تعذر التعديل: نطاق القدرة (${minW} - ${maxW} وات) يتداخل مع نطاق موجود (${overlap.min_wattage} - ${overlap.max_wattage} وات) لماركة ${effectiveBrand}.`,
+            },
           });
         }
       }
@@ -3496,7 +3803,7 @@ ${urls.join("\n")}
         max_wattage: existing.max_wattage,
         price_per_watt: existing.price_per_watt,
         source: "preview-local",
-        is_preview: true
+        is_preview: true,
       });
     } catch (err: any) {
       console.error("Error in PUT /api/energy-exchange/prices/:id:", err);
@@ -3510,10 +3817,10 @@ ${urls.join("\n")}
       // Authoritative Admin RBAC check
       const authCheck = await isEnergyExchangeAdminAuthorizedServer(req);
       if (!authCheck.authorized) {
-        return res.status(403).json({
+        return res.status(authCheck.status).json({
           success: false,
           ok: false,
-          error: { code: "FORBIDDEN", message: authCheck.message }
+          error: { code: authCheck.code, message: authCheck.message },
         });
       }
 
@@ -3525,11 +3832,11 @@ ${urls.join("\n")}
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Origin": "https://enerjoo.com",
-            ...(authHeader ? { "Authorization": authHeader } : {})
+            Origin: "https://enerjoo.com",
+            ...(authHeader ? { Authorization: authHeader } : {}),
           },
           body: JSON.stringify(req.body),
-          signal: AbortSignal.timeout(5000)
+          signal: AbortSignal.timeout(5000),
         });
 
         if (cfRes.status === 404) {
@@ -3538,46 +3845,43 @@ ${urls.join("\n")}
           const text = await cfRes.text();
           return res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(text);
         }
-      } catch (netErr: any) {
+      } catch {
         return res.status(503).json({
           success: false,
           ok: false,
           error: {
             code: "SERVICE_UNAVAILABLE",
-            message: "تعذر الاتصال بالخادم السحابي (مهلة زمنية أو انقطاع شبكة). لم يتم تنفيذ الإضافة لتجنب تعارض البيانات."
-          }
+            message: "تعذر الاتصال بالخادم السحابي (مهلة زمنية أو انقطاع شبكة). لم يتم تنفيذ الإضافة لتجنب تعارض البيانات.",
+          },
         });
       }
 
       // 2. Local Preview Fallback strictly upon confirmed Worker 404
-      if (!isWorker404) {
-        return res.status(500).json({ success: false, error: "Unexpected routing state" });
-      }
-
-      if (!isGoogleAiStudioPreviewEnvironment()) {
+      if (!isWorker404 || !isGoogleAiStudioPreviewEnvironment()) {
         return res.status(503).json({
           success: false,
           ok: false,
-          error: { code: "SERVICE_UNAVAILABLE", message: "مسار الإضافة السحابي غير متاح، والـ Fallback مخصص للمعاينة فقط." }
+          error: { code: "SERVICE_UNAVAILABLE", message: "مسار الإضافة السحابي غير متاح، والـ Fallback مخصص للمعاينة فقط." },
         });
       }
 
       const { brand, min_wattage, max_wattage, price_per_watt, pricePerWatt } = req.body || {};
-      const trimmedBrand = (brand || "").trim();
-      if (!trimmedBrand) {
+      const brandRes = resolveApprovedExchangeBrand(brand);
+      if (!brandRes.valid || !brandRes.brand) {
         return res.status(400).json({
           success: false,
           ok: false,
-          error: { code: "MISSING_BRAND", message: "اسم العلامة التجارية مطلوب." }
+          error: { code: "INVALID_BRAND", message: brandRes.error },
         });
       }
+      const canonicalBrand = brandRes.brand;
 
       const rawPrice = Number(price_per_watt ?? pricePerWatt);
       if (!Number.isFinite(rawPrice) || rawPrice <= 0 || rawPrice > 200) {
         return res.status(400).json({
           success: false,
           ok: false,
-          error: { code: "INVALID_PRICE", message: "يرجى إدخال سعر صحيح بالجنيه بين 0.1 و 200 لكل وات." }
+          error: { code: "INVALID_PRICE", message: "يرجى إدخال سعر صحيح بالجنيه بين 0.1 و 200 لكل وات." },
         });
       }
       const roundedPrice = parseFloat(rawPrice.toFixed(2));
@@ -3585,111 +3889,74 @@ ${urls.join("\n")}
       const minW = min_wattage !== undefined && min_wattage !== null ? Number(min_wattage) : null;
       const maxW = max_wattage !== undefined && max_wattage !== null ? Number(max_wattage) : null;
 
-      const records = loadPreviewRangesFromFile();
-      const brandExistingRanges = records.filter(r => r.brand.toLowerCase() === trimmedBrand.toLowerCase() && r.min_wattage != null);
-
-      if (minW !== null || maxW !== null) {
-        if (minW === null || maxW === null || minW <= 0 || maxW < minW) {
-          return res.status(400).json({
-            success: false,
-            ok: false,
-            error: { code: "INVALID_RANGE", message: "نطاق قدرة غير صالح: الحد الأدنى يجب أن يكون > 0 والحد الأقصى >= الحد الأدنى." }
-          });
-        }
-
-        // Rule: Maximum 3 ranges per brand
-        if (brandExistingRanges.length >= 3) {
-          return res.status(400).json({
-            success: false,
-            ok: false,
-            error: { code: "MAX_RANGES_EXCEEDED", message: `الحد الأقصى للنطاقات هو 3 نطاقات لكل علامة تجارية (${trimmedBrand}).` }
-          });
-        }
-
-        // Rule: Strict Overlap Prevention
-        const overlap = brandExistingRanges.find(r => minW <= r.max_wattage! && maxW >= r.min_wattage!);
-        if (overlap) {
-          return res.status(409).json({
-            success: false,
-            ok: false,
-            error: {
-              code: "RANGE_OVERLAP",
-              message: `تعذر الإضافة: نطاق القدرة (${minW} - ${maxW} وات) يتداخل مع نطاق موجود (${overlap.min_wattage} - ${overlap.max_wattage} وات) لماركة ${trimmedBrand}.`
-            }
-          });
-        }
-
-        const cleanBrand = trimmedBrand.toUpperCase().replace(/[^A-Z0-9]/g, "_");
-        const priceId = req.body.price_id || `RANGE_${cleanBrand}_${minW}_${maxW}`;
-
-        const newRecord: EnergyExchangePreviewRecord = {
-          price_id: priceId,
-          category: req.body.category || "panels",
-          brand: trimmedBrand,
-          product_type: req.body.product_type || "Solar Panel",
-          price_per_watt: roundedPrice,
-          currency: req.body.currency || "EGP",
-          min_wattage: minW,
-          max_wattage: maxW,
-          effective_date: new Date().toISOString().split("T")[0],
-          updated_at: new Date().toISOString(),
-          updated_by: authCheck.email || "admin"
-        };
-
-        records.push(newRecord);
-        await atomicSavePreviewRangesToFile(records);
-
-        return res.json({
-          success: true,
-          ok: true,
-          message: "تم إضافة نطاق السعر بنجاح في بورصة الطاقة (معاينة)",
-          price_id: priceId,
-          brand: trimmedBrand,
-          min_wattage: minW,
-          max_wattage: maxW,
-          price_per_watt: roundedPrice,
-          source: "preview-local",
-          is_preview: true
+      if (minW === null || maxW === null || !Number.isInteger(minW) || !Number.isInteger(maxW) || minW <= 0 || minW >= maxW) {
+        return res.status(400).json({
+          success: false,
+          ok: false,
+          error: {
+            code: "INVALID_RANGE",
+            message: "نطاق قدرة غير صالح: الحد الأدنى يجب أن يكون رقماً صحيحاً > 0 وأقل تماماً من الحد الأقصى.",
+          },
         });
       }
 
-      // Flat legacy price record handling
-      const cleanBrand = trimmedBrand.toUpperCase().replace(/[^A-Z0-9]/g, "_");
-      const priceId = req.body.price_id || `PRICE_PANEL_${cleanBrand}`;
-      let flatRecord = records.find(r => r.price_id === priceId || (r.brand.toLowerCase() === trimmedBrand.toLowerCase() && r.min_wattage == null));
+      const records = loadPreviewRangesFromFile();
+      const brandExistingRanges = records.filter(
+        (r) => r.brand.toLowerCase() === canonicalBrand.toLowerCase() && r.min_wattage != null && r.max_wattage != null
+      );
 
-      if (flatRecord) {
-        flatRecord.price_per_watt = roundedPrice;
-        flatRecord.updated_at = new Date().toISOString();
-        flatRecord.updated_by = authCheck.email || "admin";
-      } else {
-        flatRecord = {
-          price_id: priceId,
-          category: req.body.category || "panels",
-          brand: trimmedBrand,
-          product_type: req.body.product_type || "Solar Panel",
-          price_per_watt: roundedPrice,
-          currency: req.body.currency || "EGP",
-          min_wattage: null,
-          max_wattage: null,
-          effective_date: new Date().toISOString().split("T")[0],
-          updated_at: new Date().toISOString(),
-          updated_by: authCheck.email || "admin"
-        };
-        records.push(flatRecord);
+      if (brandExistingRanges.length >= 3) {
+        return res.status(400).json({
+          success: false,
+          ok: false,
+          error: { code: "MAX_RANGES_EXCEEDED", message: `الحد الأقصى للنطاقات هو 3 نطاقات لكل علامة تجارية (${canonicalBrand}).` },
+        });
       }
 
+      const overlap = brandExistingRanges.find((r) => minW <= r.max_wattage! && maxW >= r.min_wattage!);
+      if (overlap) {
+        return res.status(409).json({
+          success: false,
+          ok: false,
+          error: {
+            code: "RANGE_OVERLAP",
+            message: `تعذر الإضافة: نطاق القدرة (${minW} - ${maxW} وات) يتداخل مع نطاق موجود (${overlap.min_wattage} - ${overlap.max_wattage} وات) لماركة ${canonicalBrand}.`,
+          },
+        });
+      }
+
+      const cleanBrand = canonicalBrand.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+      const priceId = req.body.price_id || `RANGE_${cleanBrand}_${minW}_${maxW}`;
+
+      const newRecord: EnergyExchangePreviewRecord = {
+        price_id: priceId,
+        category: req.body.category || "panels",
+        brand: canonicalBrand,
+        product_type: req.body.product_type || "Solar Panel",
+        price_per_watt: roundedPrice,
+        currency: req.body.currency || "EGP",
+        min_wattage: minW,
+        max_wattage: maxW,
+        is_active: 1,
+        effective_date: new Date().toISOString().split("T")[0],
+        updated_at: new Date().toISOString(),
+        updated_by: authCheck.email || "admin",
+      };
+
+      records.push(newRecord);
       await atomicSavePreviewRangesToFile(records);
 
       return res.json({
         success: true,
         ok: true,
-        message: "تم حفظ السعر في بورصة الطاقة بنجاح (معاينة)",
+        message: "تم إضافة نطاق السعر بنجاح في بورصة الطاقة (معاينة)",
         price_id: priceId,
-        brand: trimmedBrand,
+        brand: canonicalBrand,
+        min_wattage: minW,
+        max_wattage: maxW,
         price_per_watt: roundedPrice,
         source: "preview-local",
-        is_preview: true
+        is_preview: true,
       });
     } catch (err: any) {
       console.error("Error in POST /api/energy-exchange:", err);

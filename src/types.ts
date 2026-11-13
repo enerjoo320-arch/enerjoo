@@ -61,6 +61,9 @@ export interface Product {
   notes?: string;
   pricePerWatt?: number;
   exchangeBrand?: string;
+  exchangeUnsupported?: boolean;
+  exchangeStatusReason?: 'out_of_bounds' | 'unconfigured' | 'inactive' | 'api_error';
+  exchangeRange?: { minWattage: number; maxWattage: number } | null;
   max_pv_open_circuit_voltage_v?: number;
   mppt_count?: number;
   hp?: number | string;
@@ -79,7 +82,8 @@ export const SOLAR_PANEL_BRANDS = [
   'Gokin',
   'Quantum Solar',
   'Ulica Solar',
-  'ZNShine Solar'
+  'ZNShine Solar',
+  'Jet Solar'
 ] as const;
 
 export type SolarPanelBrand = (typeof SOLAR_PANEL_BRANDS)[number];

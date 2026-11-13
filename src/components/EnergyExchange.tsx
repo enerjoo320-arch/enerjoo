@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   TrendingUp,
   Edit2,
@@ -15,19 +15,33 @@ import {
   Plus,
   Trash2,
   AlertTriangle,
-  Lock,
   Sparkles,
   Award,
+  Calendar,
+  Clock,
+  WifiOff,
+  Power,
+  Upload,
 } from 'lucide-react';
 import { SOLAR_PANEL_BRANDS, SolarPanelBrand, User } from '../types';
 import {
   EnergyExchangeRecord,
+  EnergyExchangeState,
   findMatchingBrandPricePerWatt,
-  addSolarPanelBrandRange,
-  updateSolarPanelBrandRange,
-  deleteSolarPanelBrandRange,
+  saveSolarPanelBrandRanges,
+  saveSolarPanelBrandLogo,
+  subscribeToBrandLogos,
   subscribeToEnergyExchange,
+  refreshEnergyExchange,
+  getCurrentEnergyExchangeState,
+  isExchangeRecordActive,
 } from '../services/energyExchangeService';
+import { uploadBrandLogoImage } from '../services/uploadService';
+import {
+  getCairoDailyDateParts,
+  formatCairoUpdatedAtTimestamp,
+  CairoDateParts,
+} from '../utils/dateUtils';
 
 interface EnergyExchangeProps {
   lang: 'ar' | 'en';
@@ -202,6 +216,18 @@ const BRAND_METADATA: Record<SolarPanelBrand, BrandMeta> = {
       'كفاءة تحويل ممتازة ومقاومة فائقة للخدوش والعوامل الجوية الشديدة'
     ],
   },
+  'Jet Solar': {
+    arName: 'جيت سولار',
+    tier: 'Certified Standard',
+    country: 'عالمي',
+    highlight: 'ألواح شمسية معتمدة للمشروعات التجارية والزراعية والمنزلية',
+    features: [
+      'تصميم قياسي عالي الاعتمادية مناسب لمحطات الضخ الزراعي والمنظومات التجارية والمنزلية',
+      'خلايا أحادية البلورة عالية الكفاءة مع أداء مستقر في ظروف التشغيل اليومية',
+      'إطار ألومنيوم مقاوم للتآكل والأحمال الميكانيكية وظروف الطقس الحار',
+      'توافق قياسي مع مختلف إنفرترات الأون جريد والهايبرد وإنفرترات المضخات'
+    ],
+  },
 };
 
 const COMMON_WATTAGES = [550, 585, 600, 650, 725];
@@ -223,20 +249,78 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
   const isAr = lang === 'ar';
   const isAdmin = user?.type === 'admin';
 
-  // Live Exchange Data State
+  // Live Exchange Data & Sync Status State
   const [livePrices, setLivePrices] = useState<Record<string, number>>(initialPrices);
   const [liveRecords, setLiveRecords] = useState<EnergyExchangeRecord[]>(initialRecords);
+  const [exchangeState, setExchangeState] = useState<EnergyExchangeState>(() => getCurrentEnergyExchangeState());
+  const [isRetrying, setIsRetrying] = useState(false);
+
+  // Automatic Daily Calendar Date in Africa/Cairo timezone
+  const [cairoDate, setCairoDate] = useState<CairoDateParts>(() => getCairoDailyDateParts());
+
+  useEffect(() => {
+    const syncCairoDate = () => {
+      const next = getCairoDailyDateParts();
+      setCairoDate(prev => (prev.dateKey !== next.dateKey ? next : prev));
+    };
+
+    const interval = setInterval(syncCairoDate, 15_000);
+    const onFocusOrVisible = () => {
+      if (document.visibilityState === 'visible') syncCairoDate();
+    };
+    window.addEventListener('focus', syncCairoDate);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', syncCairoDate);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+    };
+  }, []);
+
+  // Brand Logos stored in Firestore (public read, admin write)
+  const [brandLogos, setBrandLogos] = useState<Partial<Record<SolarPanelBrand, string>>>({});
+  const [brokenLogoUrls, setBrokenLogoUrls] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const unsubLogos = subscribeToBrandLogos((logosMap) => {
+      setBrandLogos(logosMap);
+    });
+    return () => unsubLogos();
+  }, []);
+
+  const getValidBrandLogo = (brand: SolarPanelBrand): string | null => {
+    const url = brandLogos[brand];
+    if (!url || brokenLogoUrls[url]) return null;
+    return url;
+  };
+
+  const markLogoUrlBroken = (url: string) => {
+    setBrokenLogoUrls(prev => (prev[url] ? prev : { ...prev, [url]: true }));
+  };
 
   // Subscribe to real-time sync from Cloudflare D1
   useEffect(() => {
-    const unsubscribe = subscribeToEnergyExchange((updatedPrices, updatedRecords) => {
+    const unsubscribe = subscribeToEnergyExchange((updatedPrices, updatedRecords, nextState) => {
       setLivePrices(updatedPrices);
       if (updatedRecords) {
         setLiveRecords(updatedRecords);
       }
+      if (nextState) {
+        setExchangeState(nextState);
+      }
     });
     return () => unsubscribe();
   }, []);
+
+  const handleRetryFetch = async () => {
+    setIsRetrying(true);
+    try {
+      await refreshEnergyExchange();
+    } finally {
+      setIsRetrying(false);
+    }
+  };
 
   // Filters and search
   const [searchTerm, setSearchTerm] = useState('');
@@ -250,72 +334,143 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
   // Brand Features Modal State (for all roles)
   const [selectedFeaturesBrand, setSelectedFeaturesBrand] = useState<SolarPanelBrand | null>(null);
 
-  // Admin Manage Ranges Modal State (Admin Only)
+  // Admin Manage Brand Modal State (Admin Only: Ranges, Active Status & Logo)
+  const logoFileInputRef = useRef<HTMLInputElement | null>(null);
   const [editingBrandForAdmin, setEditingBrandForAdmin] = useState<SolarPanelBrand | null>(null);
   const [adminRanges, setAdminRanges] = useState<EditableRangeItem[]>([]);
-  const [originalAdminRangeIds, setOriginalAdminRangeIds] = useState<string[]>([]);
+  const [adminBrandIsActive, setAdminBrandIsActive] = useState<boolean>(true);
+  const [initialRangesSnapshot, setInitialRangesSnapshot] = useState<string>('');
+  const [initialActiveSnapshot, setInitialActiveSnapshot] = useState<boolean>(true);
+  const [adminLogoFile, setAdminLogoFile] = useState<File | null>(null);
+  const [adminLogoPreviewUrl, setAdminLogoPreviewUrl] = useState<string | null>(null);
+  const [adminLogoMarkedRemoval, setAdminLogoMarkedRemoval] = useState<boolean>(false);
+  const [adminLogoUploadStatus, setAdminLogoUploadStatus] = useState<string | null>(null);
   const [adminModalError, setAdminModalError] = useState<string | null>(null);
   const [isAdminSaving, setIsAdminSaving] = useState(false);
+
+  const revokeBlobPreviewUrl = (url?: string | null) => {
+    if (url && url.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+    }
+  };
 
   // Global Toast Messages
   const [globalErrorMsg, setGlobalErrorMsg] = useState<string | null>(null);
   const [globalSuccessMsg, setGlobalSuccessMsg] = useState<string | null>(null);
 
+  const isApiError = exchangeState.status === 'error';
+  const isApiLoading = exchangeState.status === 'loading';
+
   // Calculator Result
   const calcMatch = useMemo(() => {
+    if (isApiError) {
+      return {
+        matchedBrand: calcBrand,
+        pricePerWatt: null,
+        isRangeMatch: false,
+        isOutOfBounds: false,
+        isUnsupported: true,
+        record: null,
+      };
+    }
     return findMatchingBrandPricePerWatt(liveRecords, calcBrand, undefined, calcWattage);
-  }, [liveRecords, calcBrand, calcWattage]);
+  }, [liveRecords, calcBrand, calcWattage, isApiError]);
 
   const calcPricePerWatt = calcMatch.pricePerWatt;
-  const calcTotalPanelPrice = calcPricePerWatt ? calcWattage * calcPricePerWatt : 0;
+  const calcTotalPanelPrice = calcPricePerWatt != null ? calcWattage * calcPricePerWatt : 0;
 
-  // Group records by brand
+  // Group records by brand (canonical 14 brands)
   const recordsByBrand = useMemo(() => {
     const map: Record<string, EnergyExchangeRecord[]> = {};
-    SOLAR_PANEL_BRANDS.forEach(b => { map[b] = []; });
+    SOLAR_PANEL_BRANDS.forEach(b => {
+      map[b] = [];
+    });
 
     liveRecords.forEach(r => {
       if (r.brand) {
         const b = r.brand;
-        const matched = SOLAR_PANEL_BRANDS.find(sb => sb.toLowerCase() === b.toLowerCase()) || b;
-        if (!map[matched]) map[matched] = [];
-        map[matched].push(r);
+        const matched = SOLAR_PANEL_BRANDS.find(sb => sb.toLowerCase() === b.toLowerCase());
+        if (matched) {
+          map[matched].push(r);
+        }
       }
     });
     return map;
   }, [liveRecords]);
 
-  // Market Summary Metrics
+  // Helper to get lowest/representative configured active price for sorting/metrics
+  const getBrandRepresentativePrice = (brand: SolarPanelBrand): number | null => {
+    const recs = (recordsByBrand[brand] || []).filter(isExchangeRecordActive);
+    const validPrices = recs.map(r => r.price_per_watt).filter(p => typeof p === 'number' && p > 0);
+    if (validPrices.length > 0) return validPrices[0];
+    const p = livePrices[brand];
+    return typeof p === 'number' && p > 0 ? p : null;
+  };
+
+  // Market Summary Metrics (strictly from configured & active backend prices — zero fake defaults)
   const marketMetrics = useMemo(() => {
-    const priceList = SOLAR_PANEL_BRANDS.map(brand => livePrices[brand] ?? 12.00);
-    const avg = priceList.reduce((acc, curr) => acc + curr, 0) / (priceList.length || 1);
+    if (isApiError) {
+      return {
+        averagePrice: null as number | null,
+        minPrice: null as number | null,
+        minBrand: null as SolarPanelBrand | null,
+        maxPrice: null as number | null,
+        maxBrand: null as SolarPanelBrand | null,
+        configuredCount: 0,
+        totalBrands: SOLAR_PANEL_BRANDS.length,
+      };
+    }
 
-    let minBrand: SolarPanelBrand = SOLAR_PANEL_BRANDS[0];
-    let maxBrand: SolarPanelBrand = SOLAR_PANEL_BRANDS[0];
-    let minPrice = Infinity;
-    let maxPrice = -Infinity;
+    const activePrices: Array<{ brand: SolarPanelBrand; price: number }> = [];
+    SOLAR_PANEL_BRANDS.forEach(brand => {
+      const recs = (recordsByBrand[brand] || []).filter(isExchangeRecordActive);
+      const validRecPrices = recs
+        .map(r => r.price_per_watt)
+        .filter(p => typeof p === 'number' && p > 0);
 
-    SOLAR_PANEL_BRANDS.forEach(b => {
-      const p = livePrices[b] ?? 12.00;
-      if (p < minPrice) {
-        minPrice = p;
-        minBrand = b;
-      }
-      if (p > maxPrice) {
-        maxPrice = p;
-        maxBrand = b;
+      if (validRecPrices.length > 0) {
+        validRecPrices.forEach(p => activePrices.push({ brand, price: p }));
       }
     });
 
+    const configuredBrandsCount = SOLAR_PANEL_BRANDS.filter(brand => {
+      const recs = (recordsByBrand[brand] || []).filter(isExchangeRecordActive);
+      return recs.some(r => typeof r.price_per_watt === 'number' && r.price_per_watt > 0);
+    }).length;
+
+    if (activePrices.length === 0) {
+      return {
+        averagePrice: null,
+        minPrice: null,
+        minBrand: null,
+        maxPrice: null,
+        maxBrand: null,
+        configuredCount: 0,
+        totalBrands: SOLAR_PANEL_BRANDS.length,
+      };
+    }
+
+    const avg = activePrices.reduce((acc, item) => acc + item.price, 0) / activePrices.length;
+    let minItem = activePrices[0];
+    let maxItem = activePrices[0];
+
+    for (const item of activePrices) {
+      if (item.price < minItem.price) minItem = item;
+      if (item.price > maxItem.price) maxItem = item;
+    }
+
     return {
       averagePrice: avg,
-      minPrice,
-      minBrand,
-      maxPrice,
-      maxBrand,
+      minPrice: minItem.price,
+      minBrand: minItem.brand,
+      maxPrice: maxItem.price,
+      maxBrand: maxItem.brand,
+      configuredCount: configuredBrandsCount,
       totalBrands: SOLAR_PANEL_BRANDS.length,
     };
-  }, [livePrices]);
+  }, [recordsByBrand, isApiError]);
 
   // Filtered & Sorted Brands List
   const displayedBrands = useMemo(() => {
@@ -333,15 +488,33 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
     }
 
     if (sortBy === 'price-asc') {
-      list.sort((a, b) => (livePrices[a] ?? 12.00) - (livePrices[b] ?? 12.00));
+      list.sort((a, b) => {
+        const pa = getBrandRepresentativePrice(a);
+        const pb = getBrandRepresentativePrice(b);
+        if (pa == null && pb == null) return 0;
+        if (pa == null) return 1;
+        if (pb == null) return -1;
+        return pa - pb;
+      });
     } else if (sortBy === 'price-desc') {
-      list.sort((a, b) => (livePrices[b] ?? 12.00) - (livePrices[a] ?? 12.00));
+      list.sort((a, b) => {
+        const pa = getBrandRepresentativePrice(a);
+        const pb = getBrandRepresentativePrice(b);
+        if (pa == null && pb == null) return 0;
+        if (pa == null) return 1;
+        if (pb == null) return -1;
+        return pb - pa;
+      });
     } else if (sortBy === 'name') {
       list.sort((a, b) => a.localeCompare(b));
     }
 
     return list;
-  }, [searchTerm, sortBy, livePrices]);
+  }, [searchTerm, sortBy, recordsByBrand, livePrices]);
+
+  const formattedLastPriceUpdate = useMemo(() => {
+    return formatCairoUpdatedAtTimestamp(exchangeState.lastUpdatedAt, lang);
+  }, [exchangeState.lastUpdatedAt, lang]);
 
   // Handlers for Features Modal (All Users)
   const handleOpenFeatures = (brand: SolarPanelBrand) => {
@@ -352,43 +525,116 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
     setSelectedFeaturesBrand(null);
   };
 
-  // Handlers for Admin Range Management Modal
+  // Handlers for Admin Brand Management Modal (Ranges + Activation + Logo)
   const handleOpenAdminEdit = (brand: SolarPanelBrand) => {
-    const existing = (recordsByBrand[brand] || [])
+    const brandRecords = recordsByBrand[brand] || [];
+    const existingRanges = brandRecords
       .filter(r => r.min_wattage != null && r.max_wattage != null)
       .sort((a, b) => (a.min_wattage ?? 0) - (b.min_wattage ?? 0));
 
-    if (existing.length > 0) {
-      setAdminRanges(existing.map(r => ({
+    const existingLegacy = brandRecords.find(r => r.min_wattage == null || r.max_wattage == null);
+    const hasAnyRecords = brandRecords.length > 0;
+    const isCurrentlyActive = hasAnyRecords ? brandRecords.some(isExchangeRecordActive) : true;
+
+    let nextEditableRanges: EditableRangeItem[];
+    if (existingRanges.length > 0) {
+      nextEditableRanges = existingRanges.map(r => ({
         priceId: r.price_id,
         minWattage: String(r.min_wattage),
         maxWattage: String(r.max_wattage),
-        pricePerWatt: r.price_per_watt.toFixed(2)
-      })));
-      setOriginalAdminRangeIds(existing.map(r => r.price_id));
-    } else {
-      // Initialize with 1 default range using current flat price
-      const curPrice = (livePrices[brand] ?? 12.00).toFixed(2);
-      setAdminRanges([
+        pricePerWatt: r.price_per_watt.toFixed(2),
+      }));
+    } else if (existingLegacy && existingLegacy.price_per_watt > 0) {
+      // Legacy price exists without wattage bounds: keep price, require admin to specify real wattage bounds
+      nextEditableRanges = [
         {
           priceId: undefined,
-          minWattage: '550',
-          maxWattage: '600',
-          pricePerWatt: curPrice
-        }
-      ]);
-      setOriginalAdminRangeIds([]);
+          minWattage: '',
+          maxWattage: '',
+          pricePerWatt: existingLegacy.price_per_watt.toFixed(2),
+        },
+      ];
+    } else {
+      // Unconfigured brand (e.g., Jet Solar): start cleanly with empty fields — NO fake default prices
+      nextEditableRanges = [
+        {
+          priceId: undefined,
+          minWattage: '',
+          maxWattage: '',
+          pricePerWatt: '',
+        },
+      ];
     }
 
+    revokeBlobPreviewUrl(adminLogoPreviewUrl);
+    const savedLogo = brandLogos[brand] || null;
+
+    setAdminRanges(nextEditableRanges);
+    setInitialRangesSnapshot(
+      JSON.stringify(
+        nextEditableRanges.map(r => ({
+          min: r.minWattage.trim(),
+          max: r.maxWattage.trim(),
+          price: r.pricePerWatt.trim(),
+        }))
+      )
+    );
+    setAdminBrandIsActive(isCurrentlyActive);
+    setInitialActiveSnapshot(isCurrentlyActive);
+    setAdminLogoFile(null);
+    setAdminLogoPreviewUrl(savedLogo);
+    setAdminLogoMarkedRemoval(false);
+    setAdminLogoUploadStatus(null);
     setEditingBrandForAdmin(brand);
     setAdminModalError(null);
   };
 
   const handleCloseAdminEdit = () => {
     if (isAdminSaving) return;
+    revokeBlobPreviewUrl(adminLogoPreviewUrl);
     setEditingBrandForAdmin(null);
     setAdminRanges([]);
-    setOriginalAdminRangeIds([]);
+    setAdminBrandIsActive(true);
+    setAdminLogoFile(null);
+    setAdminLogoPreviewUrl(null);
+    setAdminLogoMarkedRemoval(false);
+    setAdminLogoUploadStatus(null);
+    setAdminModalError(null);
+  };
+
+  const handleSelectLogoFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    const mime = (file.type || '').toLowerCase();
+    const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const allowedExts = ['jpg', 'jpeg', 'png', 'webp'];
+
+    if (!allowedExts.includes(ext) || (mime && !allowedMimes.includes(mime))) {
+      setAdminModalError(
+        isAr
+          ? 'صيغة الشعار غير مدعومة. يرجى اختيار صورة بصيغة PNG أو JPG أو WebP.'
+          : 'Unsupported logo format. Please choose PNG, JPG, or WebP.'
+      );
+      return;
+    }
+
+    setAdminModalError(null);
+    revokeBlobPreviewUrl(adminLogoPreviewUrl);
+    const previewObjectUrl = URL.createObjectURL(file);
+    setAdminLogoFile(file);
+    setAdminLogoPreviewUrl(previewObjectUrl);
+    setAdminLogoMarkedRemoval(false);
+  };
+
+  const handleRemoveLogoInModal = () => {
+    if (!editingBrandForAdmin || isAdminSaving) return;
+    revokeBlobPreviewUrl(adminLogoPreviewUrl);
+    setAdminLogoFile(null);
+    setAdminLogoPreviewUrl(null);
+    setAdminLogoMarkedRemoval(Boolean(brandLogos[editingBrandForAdmin]));
     setAdminModalError(null);
   };
 
@@ -403,18 +649,14 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
   const handleAddNextRange = () => {
     if (adminRanges.length >= 3) return; // Strictly max 3 ranges
     const last = adminRanges[adminRanges.length - 1];
-    let nextMin = 601;
-    let nextMax = 650;
-    let nextPrice = '12.00';
+    let nextMin = '';
+    let nextMax = '';
 
     if (last) {
       const lastMax = parseInt(last.maxWattage, 10);
       if (!isNaN(lastMax) && lastMax > 0) {
-        nextMin = lastMax + 1;
-        nextMax = nextMin + 50;
-      }
-      if (last.pricePerWatt) {
-        nextPrice = last.pricePerWatt;
+        nextMin = String(lastMax + 1);
+        nextMax = String(lastMax + 50);
       }
     }
 
@@ -422,10 +664,10 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
       ...prev,
       {
         priceId: undefined,
-        minWattage: String(nextMin),
-        maxWattage: String(nextMax),
-        pricePerWatt: nextPrice
-      }
+        minWattage: nextMin,
+        maxWattage: nextMax,
+        pricePerWatt: '',
+      },
     ]);
   };
 
@@ -438,88 +680,131 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
     if (!editingBrandForAdmin) return;
     setAdminModalError(null);
 
-    // Rule 1: Min 1, Max 3 ranges
-    if (adminRanges.length < 1) {
-      setAdminModalError('يجب أن يحتوي البرند على نطاق قدرة واحد على الأقل.');
-      return;
-    }
-    if (adminRanges.length > 3) {
-      setAdminModalError('الحد الأقصى للنطاقات هو 3 نطاقات لكل علامة تجارية.');
-      return;
-    }
+    const savedLogoUrl = brandLogos[editingBrandForAdmin] || null;
+    const logoChanged = Boolean(adminLogoFile) || (adminLogoMarkedRemoval && Boolean(savedLogoUrl));
 
-    const parsedRanges: { priceId?: string; minW: number; maxW: number; price: number }[] = [];
+    const currentRangesSnapshot = JSON.stringify(
+      adminRanges.map(r => ({
+        min: r.minWattage.trim(),
+        max: r.maxWattage.trim(),
+        price: r.pricePerWatt.trim(),
+      }))
+    );
+    const rangesOrActiveChanged =
+      currentRangesSnapshot !== initialRangesSnapshot || adminBrandIsActive !== initialActiveSnapshot;
+    const hadExistingRecords = (recordsByBrand[editingBrandForAdmin] || []).length > 0;
+    const allRangesBlank = adminRanges.every(
+      r => !r.minWattage.trim() && !r.maxWattage.trim() && !r.pricePerWatt.trim()
+    );
 
-    // Rule 2: Completeness, positive numbers, and min < max
-    for (let i = 0; i < adminRanges.length; i++) {
-      const item = adminRanges[i];
-      const minW = parseInt(item.minWattage.trim(), 10);
-      const maxW = parseInt(item.maxWattage.trim(), 10);
-      const price = parseFloat(item.pricePerWatt.trim());
+    // If admin only uploaded/changed/removed logo without editing prices or ranges, save ONLY the logo
+    const shouldSaveRanges =
+      rangesOrActiveChanged || (!logoChanged && !hadExistingRecords) || (!allRangesBlank && !hadExistingRecords);
 
-      if (isNaN(minW) || minW <= 0) {
-        setAdminModalError(`النطاق ${i + 1}: الحد الأدنى للقدرة غير صالح. يجب أن يكون رقماً موجباً أكبر من 0.`);
+    const parsedRanges: { priceId?: string; minWattage: number; maxWattage: number; pricePerWatt: number }[] = [];
+
+    if (shouldSaveRanges) {
+      if (adminRanges.length < 1) {
+        setAdminModalError('يجب أن يحتوي البرند على نطاق قدرة واحد على الأقل.');
         return;
       }
-      if (isNaN(maxW) || maxW <= 0) {
-        setAdminModalError(`النطاق ${i + 1}: الحد الأقصى للقدرة غير صالح. يجب أن يكون رقماً موجباً أكبر من 0.`);
-        return;
-      }
-      if (minW >= maxW) {
-        setAdminModalError(`النطاق ${i + 1}: الحد الأدنى (${minW} وات) يجب أن يكون أقل من الحد الأقصى (${maxW} وات).`);
-        return;
-      }
-      if (isNaN(price) || price <= 0 || price > 200) {
-        setAdminModalError(`النطاق ${i + 1}: سعر الوات (${item.pricePerWatt}) غير صالح. يجب أن يكون رقماً بين 0.1 و 200 ج.م.`);
+      if (adminRanges.length > 3) {
+        setAdminModalError('الحد الأقصى للنطاقات هو 3 نطاقات لكل علامة تجارية.');
         return;
       }
 
-      parsedRanges.push({ priceId: item.priceId, minW, maxW, price });
-    }
+      for (let i = 0; i < adminRanges.length; i++) {
+        const item = adminRanges[i];
+        const minW = parseInt(item.minWattage.trim(), 10);
+        const maxW = parseInt(item.maxWattage.trim(), 10);
+        const price = parseFloat(item.pricePerWatt.trim());
 
-    // Rule 3: Prevent overlapping ranges for the same brand
-    for (let i = 0; i < parsedRanges.length; i++) {
-      for (let j = i + 1; j < parsedRanges.length; j++) {
-        const r1 = parsedRanges[i];
-        const r2 = parsedRanges[j];
-        const isOverlap = r1.minW <= r2.maxW && r1.maxW >= r2.minW;
-        if (isOverlap) {
-          setAdminModalError(
-            `تداخل في نطاقات القدرة: النطاق ${i + 1} (${r1.minW}–${r1.maxW} وات) يتداخل مع النطاق ${j + 1} (${r2.minW}–${r2.maxW} وات). يرجى تعديل الحدود لتكون النطاقات منفصلة تماماً.`
-          );
+        if (isNaN(minW) || minW <= 0) {
+          setAdminModalError(`النطاق ${i + 1}: الحد الأدنى للقدرة غير صالح. يجب أن يكون رقماً موجباً أكبر من 0.`);
           return;
         }
+        if (isNaN(maxW) || maxW <= 0) {
+          setAdminModalError(`النطاق ${i + 1}: الحد الأقصى للقدرة غير صالح. يجب أن يكون رقماً موجباً أكبر من 0.`);
+          return;
+        }
+        if (minW >= maxW) {
+          setAdminModalError(`النطاق ${i + 1}: الحد الأدنى (${minW} وات) يجب أن يكون أقل تماماً من الحد الأقصى (${maxW} وات).`);
+          return;
+        }
+        if (isNaN(price) || price <= 0 || price > 200) {
+          setAdminModalError(`النطاق ${i + 1}: سعر الوات غير صالح. يجب أن يكون رقماً بين 0.1 و 200 ج.م.`);
+          return;
+        }
+
+        parsedRanges.push({ priceId: item.priceId, minWattage: minW, maxWattage: maxW, pricePerWatt: price });
+      }
+
+      for (let i = 0; i < parsedRanges.length; i++) {
+        for (let j = i + 1; j < parsedRanges.length; j++) {
+          const r1 = parsedRanges[i];
+          const r2 = parsedRanges[j];
+          const isOverlap = r1.minWattage <= r2.maxWattage && r1.maxWattage >= r2.minWattage;
+          if (isOverlap) {
+            setAdminModalError(
+              `تداخل في نطاقات القدرة: النطاق ${i + 1} (${r1.minWattage}–${r1.maxWattage} وات) يتداخل مع النطاق ${j + 1} (${r2.minWattage}–${r2.maxWattage} وات). يرجى تعديل الحدود لتكون النطاقات منفصلة تماماً.`
+            );
+            return;
+          }
+        }
       }
     }
 
-    // Rule 4: Atomic Execution
+    if (!logoChanged && !shouldSaveRanges) {
+      handleCloseAdminEdit();
+      return;
+    }
+
     try {
       setIsAdminSaving(true);
+      const targetBrand = editingBrandForAdmin;
 
-      // A. Delete ranges that were removed in the dialog
-      const activePriceIds = parsedRanges.map(r => r.priceId).filter(Boolean) as string[];
-      const toDelete = originalAdminRangeIds.filter(id => !activePriceIds.includes(id));
-      for (const delId of toDelete) {
-        await deleteSolarPanelBrandRange(delId);
-      }
-
-      // B. Update existing ranges or insert new ones
-      for (const r of parsedRanges) {
-        if (r.priceId) {
-          await updateSolarPanelBrandRange(r.priceId, editingBrandForAdmin, r.minW, r.maxW, r.price);
-        } else {
-          await addSolarPanelBrandRange(editingBrandForAdmin, r.minW, r.maxW, r.price);
+      if (logoChanged) {
+        if (adminLogoFile) {
+          const uploadedUrl = await uploadBrandLogoImage(
+            adminLogoFile,
+            (status) => setAdminLogoUploadStatus(status),
+            lang
+          );
+          setAdminLogoUploadStatus(isAr ? 'جاري حفظ الشعار...' : 'Saving brand logo...');
+          await saveSolarPanelBrandLogo(targetBrand, uploadedUrl);
+        } else if (adminLogoMarkedRemoval) {
+          setAdminLogoUploadStatus(isAr ? 'جاري إزالة الشعار...' : 'Removing brand logo...');
+          await saveSolarPanelBrandLogo(targetBrand, null);
         }
       }
 
-      const savedBrand = editingBrandForAdmin;
+      if (shouldSaveRanges) {
+        setAdminLogoUploadStatus(null);
+        await saveSolarPanelBrandRanges(targetBrand, parsedRanges, adminBrandIsActive);
+      }
+
+      revokeBlobPreviewUrl(adminLogoPreviewUrl);
       setEditingBrandForAdmin(null);
-      setGlobalSuccessMsg(`تم حفظ نطاقات وأسعار علامة ${savedBrand} بنجاح`);
+      setAdminLogoFile(null);
+      setAdminLogoPreviewUrl(null);
+      setAdminLogoMarkedRemoval(false);
+      setAdminLogoUploadStatus(null);
+
+      const successText =
+        logoChanged && shouldSaveRanges
+          ? `تم حفظ بيانات وشعار علامة ${targetBrand} بنجاح`
+          : logoChanged
+          ? adminLogoMarkedRemoval && !adminLogoFile
+            ? `تمت إزالة شعار علامة ${targetBrand} بنجاح`
+            : `تم حفظ شعار علامة ${targetBrand} بنجاح`
+          : `تم حفظ نطاقات وأسعار علامة ${targetBrand} بنجاح`;
+      setGlobalSuccessMsg(successText);
       setTimeout(() => setGlobalSuccessMsg(null), 4000);
     } catch (err: any) {
-      setAdminModalError(err?.message || 'حدث خطأ أثناء حفظ النطاقات في قاعدة البيانات');
+      setAdminModalError(err?.message || 'حدث خطأ أثناء حفظ التعديلات');
     } finally {
       setIsAdminSaving(false);
+      setAdminLogoUploadStatus(null);
     }
   };
 
@@ -540,12 +825,37 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
             </div>
 
             <h1 className="text-2xl sm:text-4xl font-extrabold tracking-tight mb-2 text-white leading-tight">
-              {isAr ? 'بورصة الألواح الشمسية: سعر الوات اللحظي' : 'Solar Panel Energy Exchange: Real-Time Watt Price'}
+              {isAr ? 'بورصة الألواح الشمسية: سعر الوات اليومي' : 'Solar Panel Energy Exchange: Live Watt Price'}
             </h1>
 
-            <h2 className="text-base sm:text-xl font-bold text-blue-200 mb-1 leading-snug">
+            <h2 className="text-base sm:text-xl font-bold text-blue-200 mb-4 leading-snug">
               {isAr ? 'المرجع المصري الأول لعرض بورصة الطاقة الشمسية في السوق المصري' : 'First Egyptian Reference for Solar Panel Energy Exchange'}
             </h2>
+
+            {/* Strictly Separated Daily Cairo Date & Actual Last DB Price Update */}
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              <div className="flex items-center gap-2 bg-slate-800/90 border border-slate-700 px-3.5 py-2 rounded-2xl">
+                <Calendar size={14} className="text-amber-400 shrink-0" />
+                <span className="text-slate-400">
+                  {isAr ? 'تاريخ اليوم (بتوقيت القاهرة):' : "Today's Date (Cairo):"}
+                </span>
+                <strong className="text-white font-bold">
+                  {isAr ? cairoDate.formattedAr : cairoDate.formattedEn}
+                </strong>
+              </div>
+
+              <div className="flex items-center gap-2 bg-slate-800/70 border border-slate-700/80 px-3.5 py-2 rounded-2xl">
+                <Clock size={14} className="text-blue-400 shrink-0" />
+                <span className="text-slate-400">
+                  {isAr ? 'آخر تحديث فعلي للأسعار:' : 'Last Actual Price Update:'}
+                </span>
+                <strong className="text-blue-200 font-semibold">
+                  {isApiError
+                    ? (isAr ? 'غير متاح حالياً' : 'Unavailable')
+                    : formattedLastPriceUpdate || (isAr ? 'لم يتم تسجيل تحديث أسعار بعد' : 'No price updates recorded yet')}
+                </strong>
+              </div>
+            </div>
           </div>
 
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
@@ -554,32 +864,40 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                 <ShieldCheck size={18} className="text-emerald-400 shrink-0" />
                 <div>
                   <span className="block font-bold">{isAr ? 'وضع المسؤول' : 'Admin Mode'}</span>
-                  <span className="text-[11px] text-emerald-400/80 font-normal">{isAr ? 'تحديث لحظي ومباشر لسعر الوات' : 'Real-Time Direct Watt Price Updates'}</span>
+                  <span className="text-[11px] text-emerald-400/80 font-normal">
+                    {isAr ? 'إدارة النطاقات والأسعار عبر D1' : 'Direct D1 Ranges & Price Management'}
+                  </span>
                 </div>
               </div>
             ) : (
               <div className="flex items-center gap-2 bg-slate-800/80 border border-slate-700/60 px-4 py-2.5 rounded-2xl text-xs text-slate-300">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span>{isAr ? 'تحديث لحظي ومباشر لسعر الوات' : 'Real-Time Direct Watt Price Updates'}</span>
+                <span className={`w-2 h-2 rounded-full ${isApiError ? 'bg-red-400' : 'bg-emerald-400 animate-pulse'}`} />
+                <span>
+                  {isApiError
+                    ? (isAr ? 'انقطاع الاتصال بالمصدر السحابي' : 'Cloud Feed Disconnected')
+                    : (isAr ? 'بيانات موحدة من قاعدة البيانات' : 'Unified Backend Feed')}
+                </span>
               </div>
             )}
           </div>
         </div>
 
-        {/* 2. Key Market Metrics Grid */}
+        {/* 2. Key Market Metrics Grid (Strict real D1 values or — when unavailable) */}
         <div className="mt-8 pt-6 border-t border-slate-800/80 grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-4">
             <span className="text-xs text-slate-400 font-medium block mb-1">
-              {isAr ? 'متوسط سعر الوات اليوم' : 'Average Watt Price'}
+              {isAr ? 'متوسط سعر الوات المسعّر' : 'Average Configured Watt Price'}
             </span>
             <div className="flex items-baseline gap-1">
               <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white">
-                {marketMetrics.averagePrice.toFixed(2)}
+                {marketMetrics.averagePrice != null ? marketMetrics.averagePrice.toFixed(2) : '—'}
               </span>
-              <span className="text-xs text-slate-400">{isAr ? 'ج.م/وات' : 'EGP/W'}</span>
+              {marketMetrics.averagePrice != null && (
+                <span className="text-xs text-slate-400">{isAr ? 'ج.م/وات' : 'EGP/W'}</span>
+              )}
             </div>
             <span className="text-[11px] text-slate-400 mt-1 block">
-              {isAr ? 'متوسط الماركات المعتمدة' : 'Across all brands'}
+              {isAr ? 'متوسط النطاقات النشطة' : 'Across active ranges'}
             </span>
           </div>
 
@@ -589,12 +907,16 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
             </span>
             <div className="flex items-baseline gap-1">
               <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-emerald-400">
-                {marketMetrics.minPrice.toFixed(2)}
+                {marketMetrics.minPrice != null ? marketMetrics.minPrice.toFixed(2) : '—'}
               </span>
-              <span className="text-xs text-slate-400">{isAr ? 'ج.م/وات' : 'EGP/W'}</span>
+              {marketMetrics.minPrice != null && (
+                <span className="text-xs text-slate-400">{isAr ? 'ج.م/وات' : 'EGP/W'}</span>
+              )}
             </div>
             <span className="text-[11px] text-slate-300 mt-1 block truncate">
-              {marketMetrics.minBrand} ({BRAND_METADATA[marketMetrics.minBrand]?.arName || ''})
+              {marketMetrics.minBrand
+                ? `${marketMetrics.minBrand} (${BRAND_METADATA[marketMetrics.minBrand]?.arName || ''})`
+                : (isAr ? 'لا توجد أسعار متاحة' : 'No prices available')}
             </span>
           </div>
 
@@ -604,31 +926,74 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
             </span>
             <div className="flex items-baseline gap-1">
               <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-amber-400">
-                {marketMetrics.maxPrice.toFixed(2)}
+                {marketMetrics.maxPrice != null ? marketMetrics.maxPrice.toFixed(2) : '—'}
               </span>
-              <span className="text-xs text-slate-400">{isAr ? 'ج.م/وات' : 'EGP/W'}</span>
+              {marketMetrics.maxPrice != null && (
+                <span className="text-xs text-slate-400">{isAr ? 'ج.م/وات' : 'EGP/W'}</span>
+              )}
             </div>
             <span className="text-[11px] text-slate-300 mt-1 block truncate">
-              {marketMetrics.maxBrand} ({BRAND_METADATA[marketMetrics.maxBrand]?.arName || ''})
+              {marketMetrics.maxBrand
+                ? `${marketMetrics.maxBrand} (${BRAND_METADATA[marketMetrics.maxBrand]?.arName || ''})`
+                : (isAr ? 'لا توجد أسعار متاحة' : 'No prices available')}
             </span>
           </div>
 
           <div className="bg-slate-800/40 border border-slate-800 rounded-2xl p-4">
             <span className="text-xs text-slate-400 font-medium block mb-1">
-              {isAr ? 'الماركات العالمية المعتمدة' : 'Certified Brands'}
+              {isAr ? 'الماركات المعتمدة في البورصة' : 'Approved Exchange Brands'}
             </span>
-            <div className="flex items-baseline gap-1">
+            <div className="flex items-baseline gap-1.5">
               <span className="text-xl sm:text-2xl font-bold font-mono tabular-nums text-white">
                 {marketMetrics.totalBrands}
               </span>
               <span className="text-xs text-slate-400">{isAr ? 'ماركة' : 'Brands'}</span>
             </div>
             <span className="text-[11px] text-slate-400 mt-1 block">
-              {isAr ? 'مطابقة لمعايير Tier 1' : 'Tier 1 Standard'}
+              {isAr
+                ? `المسعّر والنشط: ${marketMetrics.configuredCount} من ${marketMetrics.totalBrands}`
+                : `Active & Priced: ${marketMetrics.configuredCount} / ${marketMetrics.totalBrands}`}
             </span>
           </div>
         </div>
       </div>
+
+      {/* API Error Banner (Never hides failures behind fake prices) */}
+      {isApiError && (
+        <div className="mb-6 p-5 bg-red-50 border border-red-200 text-red-900 rounded-3xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+              <WifiOff size={20} />
+            </div>
+            <div>
+              <h3 className="text-sm font-extrabold text-red-900 mb-0.5">
+                {isAr ? 'تعذر تحميل أسعار بورصة الطاقة من الخادم' : 'Unable to Load Energy Exchange Prices'}
+              </h3>
+              <p className="text-xs text-red-700 font-medium">
+                {exchangeState.error || (isAr ? 'الاتصال بقاعدة البيانات غير متاح حالياً.' : 'Backend API is currently unavailable.')}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleRetryFetch}
+            disabled={isRetrying}
+            className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shrink-0 cursor-pointer disabled:opacity-60"
+          >
+            <RefreshCw size={14} className={isRetrying ? 'animate-spin' : ''} />
+            <span>{isRetrying ? (isAr ? 'جاري إعادة المحاولة...' : 'Retrying...') : (isAr ? 'إعادة المحاولة' : 'Retry')}</span>
+          </button>
+        </div>
+      )}
+
+      {/* Loading Indicator */}
+      {isApiLoading && liveRecords.length === 0 && !isApiError && (
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-100 text-blue-800 rounded-2xl flex items-center gap-3 text-xs font-bold">
+          <RefreshCw size={16} className="animate-spin text-blue-600 shrink-0" />
+          <span>{isAr ? 'جاري تحميل أسعار ونطاقات بورصة الطاقة من قاعدة البيانات...' : 'Loading live Energy Exchange prices from database...'}</span>
+        </div>
+      )}
 
       {/* Global Alerts */}
       {globalErrorMsg && (
@@ -673,12 +1038,33 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
             </p>
           </div>
 
-          <div className="bg-white border-2 border-blue-500/20 rounded-2xl p-4 sm:px-6 shadow-sm flex flex-col items-start md:items-end self-stretch md:self-auto min-w-[240px]">
-            {calcMatch.isOutOfBounds ? (
+          <div className="bg-white border-2 border-blue-500/20 rounded-2xl p-4 sm:px-6 shadow-sm flex flex-col items-start md:items-end self-stretch md:self-auto min-w-[260px]">
+            {isApiError ? (
               <div className="w-full text-center py-2">
-                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-700 bg-amber-100/80 px-3 py-1 rounded-xl">
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-red-700 bg-red-50 px-3 py-1.5 rounded-xl border border-red-200">
+                  <WifiOff size={14} className="text-red-600 shrink-0" />
+                  <span>{isAr ? 'الأسعار غير متاحة حالياً بسبب تعذر الاتصال' : 'Prices unavailable right now'}</span>
+                </span>
+              </div>
+            ) : calcMatch.isOutOfBounds ? (
+              <div className="w-full text-center py-2">
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-800 bg-amber-100/80 px-3 py-1.5 rounded-xl">
                   <AlertTriangle size={14} className="text-amber-600 shrink-0" />
-                  <span>{isAr ? 'هذه القدرة غير مدعومة حالياً لهذه العلامة التجارية' : 'Wattage out of supported ranges'}</span>
+                  <span>{isAr ? 'هذه القدرة خارج النطاقات المعتمدة لهذه العلامة' : 'Wattage out of supported ranges'}</span>
+                </span>
+              </div>
+            ) : calcMatch.isBrandInactive ? (
+              <div className="w-full text-center py-2">
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+                  <Power size={14} className="text-slate-500 shrink-0" />
+                  <span>{isAr ? 'هذه العلامة التجارية غير مفعّلة حالياً في البورصة' : 'Brand currently inactive in Exchange'}</span>
+                </span>
+              </div>
+            ) : calcPricePerWatt == null ? (
+              <div className="w-full text-center py-2">
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl">
+                  <Info size={14} className="text-slate-500 shrink-0" />
+                  <span>{isAr ? 'لم يتم تسعير هذه العلامة في البورصة بعد' : 'Brand not configured yet'}</span>
                 </span>
               </div>
             ) : (
@@ -695,7 +1081,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                   </span>
                 </div>
                 <div className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums">
-                  {calcWattage}W × {calcPricePerWatt?.toFixed(2)} {isAr ? 'ج.م/وات' : 'EGP/W'}
+                  {calcWattage}W × {calcPricePerWatt.toFixed(2)} {isAr ? 'ج.م/وات' : 'EGP/W'}
                   {calcMatch.isRangeMatch && (
                     <span className="mr-1 text-emerald-600 font-semibold">
                       ({isAr ? `نطاق: ${calcMatch.minWattage}-${calcMatch.maxWattage}W` : `Range: ${calcMatch.minWattage}-${calcMatch.maxWattage}W`})
@@ -720,17 +1106,29 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               >
                 {SOLAR_PANEL_BRANDS.map(b => {
                   const meta = BRAND_METADATA[b];
-                  const p = livePrices[b] ?? 12.00;
+                  const repPrice = isApiError ? null : getBrandRepresentativePrice(b);
                   return (
                     <option key={b} value={b}>
-                      {b} {meta ? `(${meta.arName})` : ''} — {p.toFixed(2)} {isAr ? 'ج.م/وات' : 'EGP/W'}
+                      {b} {meta ? `(${meta.arName})` : ''} —{' '}
+                      {repPrice != null
+                        ? `${repPrice.toFixed(2)} ${isAr ? 'ج.م/وات' : 'EGP/W'}`
+                        : (isAr ? 'غير مسعّر' : 'Not priced')}
                     </option>
                   );
                 })}
               </select>
             </div>
-            <div className="text-[11px] text-slate-500 mt-2 flex items-center gap-1.5">
-              <Info size={13} className="text-blue-500 shrink-0" />
+            <div className="text-[11px] text-slate-500 mt-2 flex items-center gap-2">
+              {getValidBrandLogo(calcBrand) ? (
+                <img
+                  src={getValidBrandLogo(calcBrand)!}
+                  alt={`${calcBrand} logo`}
+                  onError={() => markLogoUrlBroken(getValidBrandLogo(calcBrand)!)}
+                  className="w-6 h-6 rounded-md object-contain bg-white border border-slate-200 p-0.5 shrink-0"
+                />
+              ) : (
+                <Info size={13} className="text-blue-500 shrink-0" />
+              )}
               <span>{BRAND_METADATA[calcBrand]?.highlight || 'ماركة معتمدة عالية الكفاءة'}</span>
             </div>
           </div>
@@ -806,7 +1204,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder={isAr ? 'ابحث عن علامة تجارية (مثال: جينكو، لونجي، ترينا...)' : 'Search brand (e.g. Jinko, LONGi, Trina...)'}
+            placeholder={isAr ? 'ابحث عن علامة تجارية (مثال: جينكو، لونجي، جيت سولار...)' : 'Search brand (e.g. Jinko, LONGi, Jet Solar...)'}
             className="w-full pr-10 pl-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
           />
           {searchTerm && (
@@ -833,7 +1231,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
         </div>
       </div>
 
-      {/* 5. Main Brands Table View (Table View replacing cards with merged rowspan cells) */}
+      {/* 5. Main Brands Table View (Merged rowspan cells per brand) */}
       {displayedBrands.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-3xl border border-slate-200 p-8 shadow-xs">
           <HelpCircle size={36} className="mx-auto text-slate-400 mb-3" />
@@ -873,19 +1271,22 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
 
               {displayedBrands.map((brand, bIndex) => {
                 const meta = BRAND_METADATA[brand];
-                const brandRecs = recordsByBrand[brand] || [];
+                const brandRecs = isApiError ? [] : (recordsByBrand[brand] || []);
                 const rangeRecs = brandRecs
                   .filter(r => r.min_wattage != null && r.max_wattage != null)
                   .sort((a, b) => (a.min_wattage ?? 0) - (b.min_wattage ?? 0));
 
+                const legacyRec = brandRecs.find(r => (r.min_wattage == null || r.max_wattage == null) && r.price_per_watt > 0);
+                const isBrandInactive = brandRecs.length > 0 && !brandRecs.some(isExchangeRecordActive);
                 const hasRanges = rangeRecs.length > 0;
                 const rowSpanCount = hasRanges ? rangeRecs.length : 1;
-                const fallbackPrice = livePrices[brand] ?? 12.00;
 
                 return (
                   <tbody
                     key={brand}
-                    className="border-b-2 border-slate-200/80 hover:bg-slate-50/30 transition-colors"
+                    className={`border-b-2 border-slate-200/80 hover:bg-slate-50/30 transition-colors ${
+                      isBrandInactive ? 'opacity-70 bg-slate-50/40' : ''
+                    }`}
                   >
                     {hasRanges ? (
                       rangeRecs.map((range, rIndex) => (
@@ -893,7 +1294,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                           key={range.price_id}
                           className="border-b border-slate-100 last:border-b-0"
                         >
-                          {/* 1. Brand Cell: Merged vertically with rowSpan across all ranges */}
+                          {/* 1. Brand Cell: Merged vertically with rowSpan across all ranges (Logo appears ONLY once per brand) */}
                           {rIndex === 0 && (
                             <td
                               rowSpan={rowSpanCount}
@@ -905,12 +1306,28 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                                 </div>
                                 <div className="min-w-0">
                                   <div className="flex items-center gap-2 flex-wrap">
+                                    {(() => {
+                                      const logoUrl = getValidBrandLogo(brand);
+                                      return logoUrl ? (
+                                        <img
+                                          src={logoUrl}
+                                          alt={`${brand} logo`}
+                                          onError={() => markLogoUrlBroken(logoUrl)}
+                                          className="w-8 h-8 rounded-lg object-contain bg-white border border-slate-200/80 p-0.5 shrink-0 shadow-2xs"
+                                        />
+                                      ) : null;
+                                    })()}
                                     <span className="font-extrabold text-slate-900 text-base leading-tight notranslate">
                                       {brand}
                                     </span>
                                     <span className="text-xs text-slate-500 font-medium">
                                       ({meta?.arName || brand})
                                     </span>
+                                    {isBrandInactive && (
+                                      <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-200 text-slate-700 rounded-md">
+                                        {isAr ? 'موقوف' : 'Inactive'}
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">
                                     <span className="text-blue-700 font-semibold">{meta?.tier || 'Tier 1'}</span>
@@ -935,7 +1352,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                           {/* 3. Price per Watt Cell */}
                           <td className="py-4 px-6 text-center align-middle">
                             <div className="inline-flex items-baseline gap-1 font-mono tabular-nums">
-                              <span className="text-lg font-extrabold text-blue-600">
+                              <span className={`text-lg font-extrabold ${isBrandInactive ? 'text-slate-400 line-through' : 'text-blue-600'}`}>
                                 {range.price_per_watt.toFixed(2)}
                               </span>
                               <span className="text-xs font-bold text-slate-600 font-sans">
@@ -944,14 +1361,13 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                             </div>
                           </td>
 
-                          {/* 4. Features & Admin Actions Cell: Merged vertically with rowSpan across all ranges */}
+                          {/* 4. Features & Admin Actions Cell: Merged vertically with rowSpan */}
                           {rIndex === 0 && (
                             <td
                               rowSpan={rowSpanCount}
                               className="py-4 px-6 align-middle border-r border-slate-100 bg-white"
                             >
                               <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
-                                {/* Features Button (Customer, Supplier, and Admin) */}
                                 <button
                                   type="button"
                                   onClick={() => handleOpenFeatures(brand)}
@@ -962,7 +1378,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                                   <span>{isAr ? 'المميزات' : 'Features'}</span>
                                 </button>
 
-                                {/* Admin Edit Button (Admin Only) */}
                                 {isAdmin && (
                                   <button
                                     type="button"
@@ -980,7 +1395,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                         </tr>
                       ))
                     ) : (
-                      /* Fallback row for brand without range records yet */
+                      /* Brand with legacy flat record OR unconfigured (no ranges in D1 yet) OR API error */
                       <tr>
                         {/* 1. Brand Cell */}
                         <td className="py-4 px-6 align-middle border-l border-slate-100 bg-white">
@@ -990,12 +1405,28 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                             </div>
                             <div className="min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
+                                {(() => {
+                                  const logoUrl = getValidBrandLogo(brand);
+                                  return logoUrl ? (
+                                    <img
+                                      src={logoUrl}
+                                      alt={`${brand} logo`}
+                                      onError={() => markLogoUrlBroken(logoUrl)}
+                                      className="w-8 h-8 rounded-lg object-contain bg-white border border-slate-200/80 p-0.5 shrink-0 shadow-2xs"
+                                    />
+                                  ) : null;
+                                })()}
                                 <span className="font-extrabold text-slate-900 text-base leading-tight notranslate">
                                   {brand}
                                 </span>
                                 <span className="text-xs text-slate-500 font-medium">
                                   ({meta?.arName || brand})
                                 </span>
+                                {isBrandInactive && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-200 text-slate-700 rounded-md">
+                                    {isAr ? 'موقوف' : 'Inactive'}
+                                  </span>
+                                )}
                               </div>
                               <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">
                                 <span className="text-blue-700 font-semibold">{meta?.tier || 'Tier 1'}</span>
@@ -1008,21 +1439,35 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
 
                         {/* 2. Wattage Range Cell */}
                         <td className="py-4 px-6 text-center align-middle">
-                          <span className="text-xs text-slate-500 italic bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">
-                            {isAr ? 'السعر الأساسي الموحد (سجل قديم)' : 'Legacy Flat Price (All Wattages)'}
+                          <span className="text-xs text-slate-500 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 inline-block">
+                            {isApiError
+                              ? (isAr ? 'غير متاح مؤقتاً' : 'Temporarily Unavailable')
+                              : legacyRec
+                              ? (isAr ? 'السعر الأساسي الموحد (سجل قديم)' : 'Legacy Flat Price (All Wattages)')
+                              : (isAr ? 'لم يتم تحديد النطاقات بعد' : 'Ranges not configured yet')}
                           </span>
                         </td>
 
                         {/* 3. Price per Watt Cell */}
                         <td className="py-4 px-6 text-center align-middle">
-                          <div className="inline-flex items-baseline gap-1 font-mono tabular-nums">
-                            <span className="text-lg font-extrabold text-blue-600">
-                              {fallbackPrice.toFixed(2)}
+                          {isApiError ? (
+                            <span className="text-xs font-semibold text-red-600">
+                              {isAr ? 'تعذر التحميل' : 'Load Failed'}
                             </span>
-                            <span className="text-xs font-bold text-slate-600 font-sans">
-                              {isAr ? 'ج.م/وات' : 'EGP/W'}
+                          ) : legacyRec ? (
+                            <div className="inline-flex items-baseline gap-1 font-mono tabular-nums">
+                              <span className={`text-lg font-extrabold ${isBrandInactive ? 'text-slate-400 line-through' : 'text-blue-600'}`}>
+                                {legacyRec.price_per_watt.toFixed(2)}
+                              </span>
+                              <span className="text-xs font-bold text-slate-600 font-sans">
+                                {isAr ? 'ج.م/وات' : 'EGP/W'}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1 rounded-xl">
+                              {isAr ? 'غير مسعّر حالياً' : 'Price Unavailable'}
                             </span>
-                          </div>
+                          )}
                         </td>
 
                         {/* 4. Features & Admin Actions Cell */}
@@ -1042,7 +1487,8 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                               <button
                                 type="button"
                                 onClick={() => handleOpenAdminEdit(brand)}
-                                className="w-full sm:w-auto px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 whitespace-nowrap"
+                                disabled={isApiError}
+                                className="w-full sm:w-auto px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 whitespace-nowrap disabled:opacity-50"
                                 title={isAr ? `تحديد نطاقات وأسعار ${brand}` : `Set ${brand} Ranges`}
                               >
                                 <Edit2 size={13} className="text-amber-700 shrink-0" />
@@ -1067,9 +1513,21 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-100 relative">
             <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100">
-                  <Award size={22} />
-                </div>
+                {(() => {
+                  const featureLogoUrl = getValidBrandLogo(selectedFeaturesBrand);
+                  return featureLogoUrl ? (
+                    <img
+                      src={featureLogoUrl}
+                      alt={`${selectedFeaturesBrand} logo`}
+                      onError={() => markLogoUrlBroken(featureLogoUrl)}
+                      className="w-11 h-11 rounded-2xl object-contain bg-white border border-slate-200 p-1 shrink-0 shadow-xs"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100">
+                      <Award size={22} />
+                    </div>
+                  );
+                })()}
                 <div>
                   <h3 className="text-lg font-bold text-slate-900 notranslate leading-tight">
                     {selectedFeaturesBrand}
@@ -1089,14 +1547,12 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               </button>
             </div>
 
-            {/* Brand Highlight */}
             {BRAND_METADATA[selectedFeaturesBrand]?.highlight && (
               <div className="mb-5 p-3.5 bg-blue-50/70 border border-blue-100 rounded-2xl text-xs text-blue-900 leading-relaxed font-medium">
                 {BRAND_METADATA[selectedFeaturesBrand]?.highlight}
               </div>
             )}
 
-            {/* Brand Features List */}
             <div className="space-y-3 mb-6">
               <span className="text-xs font-bold text-slate-700 block">
                 {isAr ? 'مميزات العلامة التجارية:' : 'Brand Capabilities & Features:'}
@@ -1122,7 +1578,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               )}
             </div>
 
-            {/* Modal Actions */}
             <div className="flex items-center justify-between gap-3 pt-4 border-t border-slate-100">
               {onNavigateToBrandProducts ? (
                 <button
@@ -1156,7 +1611,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
       {isAdmin && editingBrandForAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in">
           <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto">
-            {/* Dialog Header */}
             <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-700 flex items-center justify-center border border-amber-200/60">
@@ -1182,7 +1636,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               </button>
             </div>
 
-            {/* Error Message inside modal */}
             {adminModalError && (
               <div className="mb-5 p-3.5 bg-red-50 border border-red-200 text-red-700 text-xs font-semibold rounded-2xl flex items-start gap-2">
                 <AlertTriangle size={16} className="shrink-0 mt-0.5" />
@@ -1190,13 +1643,123 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               </div>
             )}
 
-            {/* Helpful Boundary Guidance Notice */}
+            {/* Brand Logo Management inside the existing Brand Edit Dialog */}
+            <div className="mb-4 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  {adminLogoPreviewUrl && !brokenLogoUrls[adminLogoPreviewUrl] ? (
+                    <div className="relative shrink-0">
+                      <img
+                        src={adminLogoPreviewUrl}
+                        alt={`${editingBrandForAdmin} logo preview`}
+                        onError={() => {
+                          if (adminLogoPreviewUrl) markLogoUrlBroken(adminLogoPreviewUrl);
+                        }}
+                        className="w-14 h-14 rounded-xl object-contain bg-white border border-slate-200 p-1.5 shadow-2xs"
+                      />
+                    </div>
+                  ) : null}
+
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-bold text-slate-800">
+                        {isAr ? `شعار العلامة التجارية (${editingBrandForAdmin})` : `Brand Logo (${editingBrandForAdmin})`}
+                      </span>
+                      {adminLogoFile && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 bg-blue-100 text-blue-800 rounded-md">
+                          {isAr ? 'معاينة قبل الحفظ' : 'Preview before saving'}
+                        </span>
+                      )}
+                      {adminLogoMarkedRemoval && !adminLogoFile && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 bg-red-100 text-red-700 rounded-md">
+                          {isAr ? 'سيتم الحذف عند الحفظ' : 'Will remove on save'}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      {adminLogoUploadStatus
+                        ? adminLogoUploadStatus
+                        : adminLogoPreviewUrl
+                        ? (isAr ? 'يظهر الشعار بجانب اسم الماركة في جدول البورصة.' : 'Displayed alongside the brand name in the exchange table.')
+                        : (isAr ? 'يُعرض اسم الماركة نصياً عند عدم وجود شعار.' : 'Brand name renders cleanly as text when no logo is uploaded.')}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  <input
+                    ref={logoFileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    onChange={handleSelectLogoFile}
+                    disabled={isAdminSaving}
+                    className="hidden"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => logoFileInputRef.current?.click()}
+                    disabled={isAdminSaving}
+                    className="px-3.5 py-2 bg-white hover:bg-blue-50 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50"
+                  >
+                    <Upload size={13} />
+                    <span>
+                      {adminLogoPreviewUrl
+                        ? (isAr ? 'تغيير الشعار' : 'Replace Logo')
+                        : (isAr ? 'رفع شعار' : 'Upload Logo')}
+                    </span>
+                  </button>
+
+                  {adminLogoPreviewUrl && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveLogoInModal}
+                      disabled={isAdminSaving}
+                      className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                    >
+                      <Trash2 size={13} />
+                      <span>{isAr ? 'إزالة الشعار' : 'Remove Logo'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Brand Activation Status Control */}
+            <div className="mb-4 p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-3">
+              <div>
+                <span className="text-xs font-bold text-slate-800 block">
+                  {isAr ? 'حالة العلامة التجارية في البورصة' : 'Brand Exchange Status'}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  {adminBrandIsActive
+                    ? (isAr ? 'نشط: تُحسب أسعار الألواح بناءً على هذه النطاقات' : 'Active: panel pricing uses these ranges')
+                    : (isAr ? 'موقوف: لا تُستخدم الأسعار في الحسابات التلقائية' : 'Inactive: excluded from automated pricing')}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setAdminBrandIsActive(prev => !prev)}
+                disabled={isAdminSaving}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  adminBrandIsActive
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                    : 'bg-slate-200 text-slate-700 border border-slate-300'
+                }`}
+              >
+                <Power size={13} />
+                <span>{adminBrandIsActive ? (isAr ? 'مفعّل' : 'Active') : (isAr ? 'موقوف' : 'Inactive')}</span>
+              </button>
+            </div>
+
+            {/* Boundary Guidance Notice */}
             <div className="mb-4 p-3 bg-blue-50/70 border border-blue-100 rounded-2xl text-[11px] text-blue-800 flex items-start gap-2">
               <Info size={15} className="shrink-0 mt-0.5 text-blue-600" />
               <span>
                 {isAr
-                  ? 'ملاحظة: حدود النطاقات شاملة ومغلقة؛ لتفادي التداخل، يجب أن يبدأ النطاق التالي بعد نهاية النطاق السابق مباشرة (مثال: النطاق الأول 550 - 600 وات، والنطاق الثاني 601 - 655 وات).'
-                  : 'Note: Range boundaries are inclusive. To avoid overlap, consecutive ranges must not share boundaries (e.g. 550–600 W, then 601–655 W).'}
+                  ? 'ملاحظة: حدود النطاقات شاملة ومغلقة والحد الأدنى أقل من الحد الأقصى؛ لتفادي التداخل يجب ألا تتشترك الحدود (مثال: 550–600 وات، ثم 601–655 وات).'
+                  : 'Note: Range boundaries are inclusive and min must be less than max. Consecutive ranges must not overlap (e.g. 550–600 W, then 601–655 W).'}
               </span>
             </div>
 
@@ -1224,7 +1787,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                         </span>
                       </div>
 
-                      {/* Delete button: only for range 2 and range 3, NEVER for range 1 */}
                       {!isMandatoryFirst && (
                         <button
                           type="button"
@@ -1246,8 +1808,8 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                         </label>
                         <input
                           type="number"
-                          min="50"
-                          max="1500"
+                          min="1"
+                          max="2000"
                           value={rangeItem.minWattage}
                           onChange={(e) => handleUpdateAdminRangeField(idx, 'minWattage', e.target.value)}
                           placeholder="550"
@@ -1262,8 +1824,8 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                         </label>
                         <input
                           type="number"
-                          min="50"
-                          max="1500"
+                          min="2"
+                          max="2000"
                           value={rangeItem.maxWattage}
                           onChange={(e) => handleUpdateAdminRangeField(idx, 'maxWattage', e.target.value)}
                           placeholder="600"
@@ -1299,7 +1861,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               })}
             </div>
 
-            {/* Add Next Range Button (only when count < 3) */}
             {adminRanges.length < 3 ? (
               <button
                 type="button"
@@ -1320,7 +1881,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               </div>
             )}
 
-            {/* Dialog Footer Actions */}
             <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
               <button
                 type="button"
@@ -1338,7 +1898,13 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                 className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-md active:scale-95 disabled:opacity-50"
               >
                 {isAdminSaving ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
-                <span>{isAdminSaving ? (isAr ? 'جاري الحفظ...' : 'Saving...') : (isAr ? 'حفظ النطاقات' : 'Save Ranges')}</span>
+                <span>
+                  {isAdminSaving
+                    ? adminLogoUploadStatus || (isAr ? 'جاري الحفظ...' : 'Saving...')
+                    : isAr
+                    ? 'حفظ التعديلات'
+                    : 'Save Changes'}
+                </span>
               </button>
             </div>
           </div>

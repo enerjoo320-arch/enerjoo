@@ -84,6 +84,14 @@
       "destination": "https://enerjoo-api.enerjoo320.workers.dev/reviews"
     },
     {
+      "source": "/api/energy-exchange/:path*",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/energy-exchange/:path*"
+    },
+    {
+      "source": "/api/energy-exchange",
+      "destination": "https://enerjoo-api.enerjoo320.workers.dev/energy-exchange"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

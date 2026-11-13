@@ -129,6 +129,10 @@
           "type": "object",
           "description": "Map of solar panel brand names to price per watt in EGP/W"
         },
+        "logos": {
+          "type": "object",
+          "description": "Map of approved solar panel brand names to Cloudinary logo image URLs"
+        },
         "updatedAt": {
           "type": "string",
           "description": "Timestamp of last price update"

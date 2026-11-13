@@ -418,6 +418,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({
                   {product.pricePerWatt.toFixed(2)} <span className="text-[9px]">{isAr ? 'ج.م/وات' : 'EGP/W'}</span>
                 </span>
               )}
+              {product.category === 'panels' && !product.pricePerWatt && product.exchangeUnsupported && product.exchangeStatusReason === 'out_of_bounds' && (
+                <span className="text-[9px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 leading-none">
+                  {isAr ? 'خارج نطاق البورصة' : 'Outside Exchange Range'}
+                </span>
+              )}
             </div>
           </div>
           <div translate="no" className="flex items-center gap-1 text-[10px] text-solar-muted font-bold opacity-70 notranslate">

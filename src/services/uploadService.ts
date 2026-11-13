@@ -55,8 +55,13 @@ export async function compressImage(
 
       ctx.drawImage(img, 0, 0, width, height);
 
-      // Output as webp if supported, or image/jpeg
-      const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+      // Output as PNG/WebP to preserve transparency, otherwise JPEG
+      const outputType =
+        file.type === 'image/png'
+          ? 'image/png'
+          : file.type === 'image/webp'
+          ? 'image/webp'
+          : 'image/jpeg';
       canvas.toBlob(
         (blob) => {
           if (blob) {
@@ -207,6 +212,80 @@ export async function uploadSupplierProfileImage(
   }
 
   return base64DataUrl;
+}
+
+/**
+ * Uploads a Solar Panel Brand Logo using the existing Cloudinary integration.
+ * Supports JPG, JPEG, PNG, and WEBP (preserving PNG/WebP transparency).
+ * Resizes cleanly to max 360x360 to keep table rendering sharp and fast.
+ */
+export async function uploadBrandLogoImage(
+  file: File,
+  onStatusChange?: (status: string) => void,
+  lang: 'ar' | 'en' = 'ar'
+): Promise<string> {
+  if (!file) {
+    throw new Error(lang === 'ar' ? 'يرجى اختيار ملف الشعار.' : 'Please select a logo image file.');
+  }
+
+  const fileExt = file.name.split('.').pop()?.toLowerCase() || '';
+  const mimeType = (file.type || '').toLowerCase();
+  const hasValidExt = ['jpg', 'jpeg', 'png', 'webp'].includes(fileExt);
+  const hasValidMime = !mimeType || ALLOWED_IMAGE_TYPES.includes(mimeType);
+
+  if (!hasValidExt || !hasValidMime) {
+    throw new Error(
+      lang === 'ar'
+        ? 'صيغة الصورة غير مدعومة. يرجى اختيار ملف PNG أو JPG أو WebP.'
+        : 'Unsupported format. Please upload PNG, JPG, JPEG, or WEBP.'
+    );
+  }
+
+  onStatusChange?.(lang === 'ar' ? 'جاري تجهيز وضغط شعار العلامة...' : 'Optimizing brand logo...');
+  const readyFile = await ensureCompressedImage(file, onStatusChange, lang);
+
+  let compressedBlob: Blob;
+  try {
+    compressedBlob = await compressImage(readyFile, 360, 360, 0.9);
+  } catch {
+    compressedBlob = readyFile;
+  }
+
+  const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+  const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
+
+  if (cloudName && uploadPreset) {
+    onStatusChange?.(lang === 'ar' ? 'جاري رفع الشعار إلى Cloudinary...' : 'Uploading logo to Cloudinary...');
+    const formData = new FormData();
+    formData.append('file', compressedBlob, file.name);
+    formData.append('upload_preset', uploadPreset);
+
+    const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+      method: 'POST',
+      body: formData,
+      signal: AbortSignal.timeout(12000),
+    });
+
+    const data: any = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.secure_url) {
+      throw new Error(
+        data?.error?.message ||
+          (lang === 'ar' ? 'فشل رفع الشعار إلى Cloudinary. يرجى المحاولة مرة أخرى.' : 'Failed to upload logo to Cloudinary.')
+      );
+    }
+    return data.secure_url;
+  }
+
+  // Preview/dev fallback when Cloudinary env vars are not configured
+  const dataUrl = await blobToDataUrl(compressedBlob);
+  if (!dataUrl || dataUrl.length > 750_000) {
+    throw new Error(
+      lang === 'ar'
+        ? 'حجم الشعار بعد الضغط كبير جداً، يرجى اختيار صورة أصغر.'
+        : 'Compressed logo is still too large. Please choose a smaller image.'
+    );
+  }
+  return dataUrl;
 }
 
 export interface ProductImageUploadResult {

@@ -896,6 +896,13 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
                     {product.pricePerWatt.toFixed(2)} {isAr ? 'ج.م / وات' : 'EGP/W'}
                   </span>
                 )}
+                {product.category === 'panels' && !product.pricePerWatt && product.exchangeUnsupported && (
+                  <span className="text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                    {product.exchangeStatusReason === 'out_of_bounds'
+                      ? (isAr ? 'قدرة اللوح غير مشمولة بنطاقات البورصة الحالية (معروض بسعر الكتالوج الأصلي)' : 'Wattage outside current Energy Exchange ranges (catalog price shown)')
+                      : (isAr ? 'غير مسعّر في البورصة حالياً (معروض بسعر الكتالوج الأصلي)' : 'Not priced in current Energy Exchange (catalog price shown)')}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -1702,6 +1709,13 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
             {product.category === 'panels' && product.pricePerWatt && (
               <span className="text-[10px] font-bold text-solar-muted bg-solar-light px-1.5 py-0.5 rounded border border-solar-border/70 notranslate">
                 {product.pricePerWatt.toFixed(2)} {isAr ? 'ج.م/وات' : 'EGP/W'}
+              </span>
+            )}
+            {product.category === 'panels' && !product.pricePerWatt && product.exchangeUnsupported && (
+              <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 truncate">
+                {product.exchangeStatusReason === 'out_of_bounds'
+                  ? (isAr ? 'خارج نطاق البورصة' : 'Outside Exchange Range')
+                  : (isAr ? 'غير مسعّر بالبورصة' : 'Unpriced in Exchange')}
               </span>
             )}
           </div>

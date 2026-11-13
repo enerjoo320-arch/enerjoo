@@ -842,11 +842,11 @@ export async function optionalAuthenticateUser(
 /**
  * Helper to enforce admin-only operations
  */
-export function requireAdmin(authResult: AuthResult): { allowed: boolean; response?: Response } {
+export function requireAdmin(authResult: AuthResult, request?: Request): { allowed: boolean; response?: Response } {
   if (!authResult.allowed || !authResult.user) {
     return {
       allowed: false,
-      response: json({ ok: false, success: false, error: authResult.message }, authResult.status),
+      response: json({ ok: false, success: false, error: authResult.message }, authResult.status, request),
     };
   }
   if (authResult.user.role !== 'admin') {
@@ -861,7 +861,8 @@ export function requireAdmin(authResult: AuthResult): { allowed: boolean; respon
             message: 'هذه العملية مخصصة لمديري منصة Enerjoo فقط.',
           },
         },
-        403
+        403,
+        request
       ),
     };
   }
@@ -3700,159 +3701,444 @@ async function handleProductReviews(request: Request, env: Env, path: string, me
 // ============================================================================
 // 9. /energy-exchange Handler (Cloudflare D1 Single Source of Truth - Admin Writes)
 // ============================================================================
-const DEFAULT_EXCHANGE_RECORDS = [
-  { price_id: 'PRICE_PANEL_JINKO', category: 'panels', brand: 'Jinko', product_type: 'Solar Panel', price_per_watt: 12.00, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_LONGI', category: 'panels', brand: 'LONGi Solar', product_type: 'Solar Panel', price_per_watt: 12.20, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_AIKO', category: 'panels', brand: 'AIKO', product_type: 'Solar Panel', price_per_watt: 12.50, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_TRINA', category: 'panels', brand: 'Trina Solar', product_type: 'Solar Panel', price_per_watt: 11.90, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_JA_SOLAR', category: 'panels', brand: 'JA Solar', product_type: 'Solar Panel', price_per_watt: 11.95, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_RISEN', category: 'panels', brand: 'Risen', product_type: 'Solar Panel', price_per_watt: 11.80, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_GCL', category: 'panels', brand: 'GCL', product_type: 'Solar Panel', price_per_watt: 11.75, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_SUNTECH', category: 'panels', brand: 'Suntech', product_type: 'Solar Panel', price_per_watt: 11.85, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_ASTRONERGY', category: 'panels', brand: 'Astronergy', product_type: 'Solar Panel', price_per_watt: 11.90, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_GOKIN', category: 'panels', brand: 'Gokin', product_type: 'Solar Panel', price_per_watt: 11.70, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_QUANTUM', category: 'panels', brand: 'Quantum Solar', product_type: 'Solar Panel', price_per_watt: 11.80, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_ULICA', category: 'panels', brand: 'Ulica Solar', product_type: 'Solar Panel', price_per_watt: 11.75, currency: 'EGP' },
-  { price_id: 'PRICE_PANEL_ZNSHINE', category: 'panels', brand: 'ZNShine Solar', product_type: 'Solar Panel', price_per_watt: 11.80, currency: 'EGP' },
-];
+const APPROVED_SOLAR_PANEL_BRANDS = [
+  'Jinko',
+  'LONGi Solar',
+  'AIKO',
+  'Trina Solar',
+  'JA Solar',
+  'Risen',
+  'GCL',
+  'Suntech',
+  'Astronergy',
+  'Gokin',
+  'Quantum Solar',
+  'Ulica Solar',
+  'ZNShine Solar',
+  'Jet Solar',
+] as const;
+
+function resolveApprovedSolarBrand(rawBrand?: string): { valid: boolean; brand?: string; error?: string } {
+  const trimmed = (rawBrand || '').trim();
+  if (!trimmed) {
+    return { valid: false, error: 'اسم العلامة التجارية مطلوب.' };
+  }
+  if (trimmed.toLowerCase() === 'gate solar' || trimmed.toLowerCase() === 'gatesolar') {
+    return { valid: false, error: 'العلامة التجارية غير معتمدة. الاسم الصحيح هو Jet Solar.' };
+  }
+  const canonical = APPROVED_SOLAR_PANEL_BRANDS.find(b => b.toLowerCase() === trimmed.toLowerCase());
+  if (!canonical) {
+    return {
+      valid: false,
+      error: `العلامة التجارية "${trimmed}" غير مدرجة ضمن الماركات الـ 14 المعتمدة في بورصة الطاقة.`,
+    };
+  }
+  return { valid: true, brand: canonical };
+}
 
 function normalizeBrandToPriceId(brand: string): string {
   const clean = brand.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
   return `PRICE_PANEL_${clean}`;
 }
 
-async function ensureEnergyExchangeTable(db: D1Database): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS energy_exchange_prices (
-      price_id TEXT PRIMARY KEY,
-      category TEXT NOT NULL DEFAULT 'panels',
-      brand TEXT NOT NULL,
-      product_type TEXT DEFAULT 'Solar Panel',
-      price_per_watt REAL NOT NULL,
-      currency TEXT NOT NULL DEFAULT 'EGP',
-      effective_date TEXT DEFAULT (DATE('now')),
-      updated_at TEXT DEFAULT (DATETIME('now')),
-      updated_by TEXT DEFAULT 'system'
-    );
-  `);
+function buildRangePriceId(brand: string, minW: number, maxW: number): string {
+  const clean = brand.trim().toUpperCase().replace(/[^A-Z0-9]/g, '_');
+  return `RANGE_${clean}_${minW}_${maxW}`;
+}
 
+let cachedIsActiveColumnSupported: boolean | null = null;
+
+async function hasEnergyExchangeIsActiveColumn(db: D1Database): Promise<boolean> {
+  if (cachedIsActiveColumnSupported !== null) return cachedIsActiveColumnSupported;
   try {
-    const row = await db.prepare('SELECT COUNT(*) as count FROM energy_exchange_prices').first<{ count: number }>();
-    if (!row || row.count === 0) {
-      for (const item of DEFAULT_EXCHANGE_RECORDS) {
-        await db.prepare(`
-          INSERT INTO energy_exchange_prices (
-            price_id, category, brand, product_type, price_per_watt, currency, effective_date, updated_at, updated_by
-          ) VALUES (?, ?, ?, ?, ?, ?, DATE('now'), DATETIME('now'), 'system')
-          ON CONFLICT(price_id) DO NOTHING
-        `).bind(
-          item.price_id,
-          item.category,
-          item.brand,
-          item.product_type,
-          item.price_per_watt,
-          item.currency
-        ).run();
-      }
-    }
-  } catch (seedErr) {
-    console.warn('Energy exchange initial table check notice:', seedErr);
+    const info = await db.prepare('PRAGMA table_info(energy_exchange_prices)').all<any>();
+    const cols = Array.isArray(info.results) ? info.results : [];
+    const hasCol = cols.some((c: any) => String(c.name || '').toLowerCase() === 'is_active');
+    cachedIsActiveColumnSupported = hasCol;
+    return hasCol;
+  } catch {
+    return false;
   }
 }
 
-async function handleEnergyExchange(request: Request, env: Env, path: string, method: string): Promise<Response> {
-  // DDL execution (ensureEnergyExchangeTable) is removed from HTTP request handling per safety requirements.
-  const cleanPath = path.replace(/^\/api/, '');
-  const parts = cleanPath.split('/').filter(Boolean); // ['energy-exchange', 'ranges', ':id'] or ['energy-exchange', 'prices', ':id']
-  let resourceId: string | undefined;
+function computeExchangeMaxUpdatedAt(rows: any[]): string | null {
+  let latestMs = 0;
+  let latestRaw: string | null = null;
+  for (const r of rows) {
+    if (!r || typeof r.updated_at !== 'string' || !r.updated_at.trim()) continue;
+    const raw = r.updated_at.trim();
+    const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw) ? raw.replace(' ', 'T') + 'Z' : raw;
+    const ms = Date.parse(normalized);
+    if (!isNaN(ms) && ms > latestMs) {
+      latestMs = ms;
+      latestRaw = raw;
+    }
+  }
+  return latestRaw;
+}
 
+async function handleEnergyExchangeBrand(
+  request: Request,
+  env: Env,
+  rawBrandParam: string,
+  method: string
+): Promise<Response> {
+  const authResult = await authenticateUser(request, env);
+  const adminCheck = requireAdmin(authResult, request);
+  if (!adminCheck.allowed) return adminCheck.response!;
+
+  const brandResolution = resolveApprovedSolarBrand(rawBrandParam);
+  if (!brandResolution.valid || !brandResolution.brand) {
+    return errorJson(brandResolution.error || 'العلامة التجارية غير معتمدة.', 400, request);
+  }
+  const canonicalBrand = brandResolution.brand;
+
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return errorJson('Invalid JSON payload in request body', 400, request);
+  }
+
+  // Strictly derive identity from verified Firebase token — never trust body fields
+  const updatedBy = authResult.user?.email || authResult.user?.uid || 'admin';
+  const hasIsActiveCol = await hasEnergyExchangeIsActiveColumn(env.DB);
+
+  // Mode 1: Activation / Deactivation Toggle only (PATCH without ranges)
+  if (method === 'PATCH' && !Array.isArray(body?.ranges)) {
+    if (body?.is_active === undefined && body?.isActive === undefined) {
+      return errorJson('Missing is_active boolean flag', 400, request);
+    }
+
+    const activeFlag = body.is_active === false || body.is_active === 0 || body.isActive === false ? 0 : 1;
+
+    const existingCountRow = await env.DB.prepare(
+      'SELECT COUNT(*) as cnt FROM energy_exchange_prices WHERE brand = ? COLLATE NOCASE'
+    ).bind(canonicalBrand).first<{ cnt: number }>();
+
+    if (!existingCountRow || existingCountRow.cnt === 0) {
+      return errorJson(
+        `لا يمكن تغيير حالة التفعيل قبل إضافة نطاق قدرة واحد على الأقل لعلامة ${canonicalBrand}.`,
+        400,
+        request
+      );
+    }
+
+    if (!hasIsActiveCol) {
+      return json(
+        {
+          ok: false,
+          success: false,
+          error: {
+            code: 'SCHEMA_MIGRATION_REQUIRED',
+            message: 'يتطلب تفعيل أو إيقاف العلامة التجارية تنفيذ الترحيل الخاص بعمود is_active في قاعدة بيانات D1.',
+          },
+        },
+        409,
+        request
+      );
+    }
+
+    await env.DB.prepare(
+      `UPDATE energy_exchange_prices
+       SET is_active = ?, updated_at = datetime('now'), updated_by = ?
+       WHERE brand = ? COLLATE NOCASE`
+    )
+      .bind(activeFlag, updatedBy, canonicalBrand)
+      .run();
+
+    return successJson(
+      {
+        message: activeFlag === 1 ? `تم تفعيل علامة ${canonicalBrand} في البورصة` : `تم إيقاف علامة ${canonicalBrand} مؤقتاً`,
+        brand: canonicalBrand,
+        is_active: activeFlag,
+        updated_by: updatedBy,
+      },
+      200,
+      request
+    );
+  }
+
+  // Mode 2: Atomic Range Replacement (PUT or PATCH with ranges array)
+  if (method === 'PUT' || method === 'PATCH') {
+    const rawRanges = body?.ranges;
+    if (!Array.isArray(rawRanges) || rawRanges.length < 1) {
+      return errorJson('يجب تحديد نطاق قدرة واحد على الأقل للعلامة التجارية.', 400, request);
+    }
+    if (rawRanges.length > 3) {
+      return errorJson(`الحد الأقصى للنطاقات هو 3 نطاقات لكل علامة تجارية (${canonicalBrand}).`, 400, request);
+    }
+
+    const parsedRanges: Array<{ price_id: string; min_wattage: number; max_wattage: number; price_per_watt: number }> = [];
+    const seenIds = new Set<string>();
+
+    for (let i = 0; i < rawRanges.length; i++) {
+      const item = rawRanges[i] || {};
+      const minW = Number(item.min_wattage ?? item.minWattage);
+      const maxW = Number(item.max_wattage ?? item.maxWattage);
+      const price = Number(item.price_per_watt ?? item.pricePerWatt);
+
+      if (!Number.isFinite(minW) || !Number.isInteger(minW) || minW <= 0) {
+        return errorJson(`النطاق ${i + 1}: الحد الأدنى للقدرة يجب أن يكون رقماً صحيحاً أكبر من 0 وات.`, 400, request);
+      }
+      if (!Number.isFinite(maxW) || !Number.isInteger(maxW) || maxW <= 0) {
+        return errorJson(`النطاق ${i + 1}: الحد الأقصى للقدرة يجب أن يكون رقماً صحيحاً أكبر من 0 وات.`, 400, request);
+      }
+      if (minW >= maxW) {
+        return errorJson(`النطاق ${i + 1}: الحد الأدنى (${minW}) يجب أن يكون أقل تماماً من الحد الأقصى (${maxW}).`, 400, request);
+      }
+      if (!Number.isFinite(price) || price <= 0 || price > 200) {
+        return errorJson(`النطاق ${i + 1}: سعر الوات غير صالح. يجب أن يكون بين 0.1 و 200 ج.م.`, 400, request);
+      }
+
+      const roundedPrice = parseFloat(price.toFixed(2));
+      let rangePriceId = buildRangePriceId(canonicalBrand, minW, maxW);
+      if (seenIds.has(rangePriceId)) {
+        rangePriceId = `${rangePriceId}_${i + 1}`;
+      }
+      seenIds.add(rangePriceId);
+
+      parsedRanges.push({
+        price_id: rangePriceId,
+        min_wattage: minW,
+        max_wattage: maxW,
+        price_per_watt: roundedPrice,
+      });
+    }
+
+    // Strict pairwise inclusive overlap validation
+    for (let i = 0; i < parsedRanges.length; i++) {
+      for (let j = i + 1; j < parsedRanges.length; j++) {
+        const a = parsedRanges[i];
+        const b = parsedRanges[j];
+        if (a.min_wattage <= b.max_wattage && a.max_wattage >= b.min_wattage) {
+          return json(
+            {
+              ok: false,
+              success: false,
+              error: {
+                code: 'RANGE_OVERLAP',
+                message: `تعذر الحفظ: نطاق القدرة (${a.min_wattage} - ${a.max_wattage} وات) يتداخل مع النطاق (${b.min_wattage} - ${b.max_wattage} وات) لماركة ${canonicalBrand}.`,
+              },
+            },
+            409,
+            request
+          );
+        }
+      }
+    }
+
+    const activeFlag = body?.is_active === false || body?.is_active === 0 || body?.isActive === false ? 0 : 1;
+    if (activeFlag === 0 && !hasIsActiveCol) {
+      return json(
+        {
+          ok: false,
+          success: false,
+          error: {
+            code: 'SCHEMA_MIGRATION_REQUIRED',
+            message: 'يتطلب إيقاف العلامة التجارية إضافة عمود is_active إلى جدول energy_exchange_prices في D1.',
+          },
+        },
+        409,
+        request
+      );
+    }
+
+    // Execute all brand changes inside a single transactional D1 batch
+    const statements: D1PreparedStatement[] = [
+      env.DB.prepare('DELETE FROM energy_exchange_prices WHERE brand = ? COLLATE NOCASE').bind(canonicalBrand),
+    ];
+
+    for (const r of parsedRanges) {
+      if (hasIsActiveCol) {
+        statements.push(
+          env.DB.prepare(
+            `INSERT INTO energy_exchange_prices (
+              price_id, category, brand, product_type, price_per_watt, currency, min_wattage, max_wattage, is_active, effective_date, updated_at, updated_by
+            ) VALUES (?, 'panels', ?, 'Solar Panel', ?, 'EGP', ?, ?, ?, DATE('now'), datetime('now'), ?)`
+          ).bind(r.price_id, canonicalBrand, r.price_per_watt, r.min_wattage, r.max_wattage, activeFlag, updatedBy)
+        );
+      } else {
+        statements.push(
+          env.DB.prepare(
+            `INSERT INTO energy_exchange_prices (
+              price_id, category, brand, product_type, price_per_watt, currency, min_wattage, max_wattage, effective_date, updated_at, updated_by
+            ) VALUES (?, 'panels', ?, 'Solar Panel', ?, 'EGP', ?, ?, DATE('now'), datetime('now'), ?)`
+          ).bind(r.price_id, canonicalBrand, r.price_per_watt, r.min_wattage, r.max_wattage, updatedBy)
+        );
+      }
+    }
+
+    await env.DB.batch(statements);
+
+    return successJson(
+      {
+        message: `تم حفظ نطاقات وأسعار علامة ${canonicalBrand} بنجاح في Cloudflare D1`,
+        brand: canonicalBrand,
+        is_active: activeFlag,
+        count: parsedRanges.length,
+        ranges: parsedRanges,
+        updated_by: updatedBy,
+      },
+      200,
+      request
+    );
+  }
+
+  return errorJson(`Method ${method} not allowed for /energy-exchange/brands`, 405, request);
+}
+
+async function handleEnergyExchange(request: Request, env: Env, path: string, method: string): Promise<Response> {
+  // No DDL execution inside HTTP handlers. Tables & columns must be managed via D1 migrations.
+  const cleanPath = path.replace(/^\/api/, '');
+  const parts = cleanPath.split('/').filter(Boolean); // ['energy-exchange', 'prices'|'ranges'|'brands', ':id']
+
+  // Route brand-level atomic operations: /energy-exchange/brands/:brand
+  if (parts.length >= 3 && parts[1] === 'brands') {
+    const rawBrand = decodeURIComponent(parts.slice(2).join('/'));
+    return await handleEnergyExchangeBrand(request, env, rawBrand, method);
+  }
+
+  let resourceId: string | undefined;
   if (parts.length >= 3 && (parts[1] === 'prices' || parts[1] === 'ranges')) {
     resourceId = decodeURIComponent(parts[2]);
-  } else if (parts.length >= 2 && parts[1] !== 'prices' && parts[1] !== 'ranges') {
+  } else if (parts.length >= 2 && parts[1] !== 'prices' && parts[1] !== 'ranges' && parts[1] !== 'brands') {
     resourceId = decodeURIComponent(parts[1]);
   }
 
   // 1. GET: Public read for all users (Customers, Suppliers, Guests, Admins)
   if (method === 'GET') {
     if (resourceId) {
-      const row = await env.DB.prepare(
-        'SELECT * FROM energy_exchange_prices WHERE price_id = ? OR brand = ? COLLATE NOCASE'
-      ).bind(resourceId, resourceId).first();
+      const { results: matchedRows } = await env.DB.prepare(
+        'SELECT * FROM energy_exchange_prices WHERE price_id = ? OR brand = ? COLLATE NOCASE ORDER BY min_wattage ASC'
+      )
+        .bind(resourceId, resourceId)
+        .all<any>();
 
-      if (!row) return errorJson(`Price record not found: ${resourceId}`, 404, request);
-      return successJson({ price: row, record: row }, 200, request);
+      if (!matchedRows || matchedRows.length === 0) {
+        return errorJson(`Price record not found: ${resourceId}`, 404, request);
+      }
+      return successJson({ price: matchedRows[0], record: matchedRows[0], records: matchedRows }, 200, request);
     }
 
-    let results: any[] = [];
+    let rawResults: any[] = [];
     try {
       const queryRes = await env.DB.prepare(
         'SELECT * FROM energy_exchange_prices ORDER BY category, brand, min_wattage ASC'
       ).all<any>();
-      results = Array.isArray(queryRes.results) ? queryRes.results : [];
+      rawResults = Array.isArray(queryRes.results) ? queryRes.results : [];
     } catch (dbErr) {
-      console.warn('D1 Query warning in /energy-exchange:', dbErr);
-      results = [];
+      console.error('D1 Query failure in /energy-exchange:', dbErr);
+      return errorJson('تعذر قراءة بيانات بورصة الطاقة من قاعدة البيانات.', 503, request);
     }
 
+    // Normalize active flag and filter out deprecated "Gate Solar" if ever queried
+    const results = rawResults
+      .filter(r => r && typeof r.brand === 'string' && r.brand.trim().toLowerCase() !== 'gate solar')
+      .map(r => ({
+        ...r,
+        is_active: r.is_active === undefined || r.is_active === null ? 1 : Number(r.is_active) === 0 ? 0 : 1,
+      }));
+
     const pricesMap: Record<string, number> = {};
-    if (Array.isArray(results)) {
-      for (const r of results) {
-        if (r.brand && typeof r.price_per_watt === 'number') {
-          // If a brand has multiple ranges, pricesMap holds latest/default as fallback
+    for (const r of results) {
+      if (r.is_active !== 1) continue;
+      if (r.brand && typeof r.price_per_watt === 'number' && r.price_per_watt > 0) {
+        if (pricesMap[r.brand] === undefined) {
           pricesMap[r.brand] = r.price_per_watt;
         }
       }
     }
 
-    const res = json({
-      success: true,
-      ok: true,
-      count: results.length,
-      prices: pricesMap,
-      data: results,
-      records: results
-    }, 200, request);
+    const lastUpdatedAt = computeExchangeMaxUpdatedAt(results);
+
+    const res = json(
+      {
+        success: true,
+        ok: true,
+        count: results.length,
+        approved_brands: APPROVED_SOLAR_PANEL_BRANDS,
+        prices: pricesMap,
+        data: results,
+        records: results,
+        last_updated_at: lastUpdatedAt,
+      },
+      200,
+      request
+    );
     res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
     res.headers.set('Pragma', 'no-cache');
     res.headers.set('Expires', '0');
     return res;
   }
 
-  // 2. DELETE: Protected (Admin only) - Delete range or price record
+  // 2. DELETE: Protected (Admin only) - Delete optional range (Range 2 or 3)
   if (method === 'DELETE') {
     const authResult = await authenticateUser(request, env);
-    const adminCheck = requireAdmin(authResult);
+    const adminCheck = requireAdmin(authResult, request);
     if (!adminCheck.allowed) return adminCheck.response!;
 
     if (!resourceId) {
       return errorJson('Missing record ID or price_id for deletion', 400, request);
     }
 
-    const target = await env.DB.prepare(
-      'SELECT price_id, brand FROM energy_exchange_prices WHERE price_id = ?'
-    ).bind(resourceId).first<any>();
+    const target = await env.DB.prepare('SELECT price_id, brand FROM energy_exchange_prices WHERE price_id = ?')
+      .bind(resourceId)
+      .first<any>();
 
     if (!target) {
-      // Gracefully treat as deleted / already removed
-      return successJson({
-        message: 'السجل غير موجود أو تم حذفه سابقاً',
-        deleted_id: resourceId
-      }, 200, request);
+      return successJson(
+        {
+          message: 'السجل غير موجود أو تم حذفه سابقاً',
+          deleted_id: resourceId,
+        },
+        200,
+        request
+      );
     }
 
-    await env.DB.prepare('DELETE FROM energy_exchange_prices WHERE price_id = ?').bind(resourceId).run();
+    // Atomic minimum-1-range guard: refuse deleting the only remaining range/record for a brand
+    const deleteRes: any = await env.DB.prepare(
+      `DELETE FROM energy_exchange_prices
+       WHERE price_id = ?
+         AND (
+           SELECT COUNT(*) FROM energy_exchange_prices WHERE brand = ? COLLATE NOCASE
+         ) > 1`
+    )
+      .bind(resourceId, target.brand)
+      .run();
 
-    return successJson({
-      message: 'تم حذف السجل بنجاح من بورصة الطاقة',
-      deleted_id: resourceId,
-      brand: target.brand
-    }, 200, request);
+    const changes = deleteRes.meta?.changes ?? deleteRes.changes ?? 0;
+    if (changes === 0) {
+      return json(
+        {
+          ok: false,
+          success: false,
+          error: {
+            code: 'MIN_RANGE_REQUIRED',
+            message: `لا يمكن حذف النطاق الوحيد لماركة ${target.brand}. النطاق الأول إجباري، ويمكنك تعديله أو إيقاف تفعيل البرند بدلاً من ذلك.`,
+          },
+        },
+        400,
+        request
+      );
+    }
+
+    return successJson(
+      {
+        message: 'تم حذف النطاق بنجاح من بورصة الطاقة',
+        deleted_id: resourceId,
+        brand: target.brand,
+      },
+      200,
+      request
+    );
   }
 
-  // 3. PUT: Protected (Admin only) - Update or Upsert price or range record
+  // 3. PUT: Protected (Admin only) - Update or Upsert a range record
   if (method === 'PUT') {
     const authResult = await authenticateUser(request, env);
-    const adminCheck = requireAdmin(authResult);
+    const adminCheck = requireAdmin(authResult, request);
     if (!adminCheck.allowed) return adminCheck.response!;
 
     let body: any;
@@ -3873,189 +4159,212 @@ async function handleEnergyExchange(request: Request, env: Env, path: string, me
     }
 
     const roundedPrice = parseFloat(pricePerWatt.toFixed(2));
+    // Always derive updatedBy strictly from authenticated Firebase token
     const updatedBy = authResult.user?.email || authResult.user?.uid || 'admin';
     const nowIso = new Date().toISOString();
 
     const minWattage = body.min_wattage !== undefined && body.min_wattage !== null ? Number(body.min_wattage) : null;
     const maxWattage = body.max_wattage !== undefined && body.max_wattage !== null ? Number(body.max_wattage) : null;
 
-    // Lookup existing record strictly by exact price_id first
-    let existing = await env.DB.prepare(
-      'SELECT * FROM energy_exchange_prices WHERE price_id = ?'
-    ).bind(targetId).first<any>();
+    let existing = await env.DB.prepare('SELECT * FROM energy_exchange_prices WHERE price_id = ?')
+      .bind(targetId)
+      .first<any>();
 
-    // If not found by price_id and targetId is a brand name, lookup flat price record
     if (!existing && !targetId.startsWith('RANGE_') && !targetId.startsWith('PRICE_')) {
       existing = await env.DB.prepare(
         'SELECT * FROM energy_exchange_prices WHERE brand = ? AND min_wattage IS NULL COLLATE NOCASE'
-      ).bind(targetId).first<any>();
+      )
+        .bind(targetId)
+        .first<any>();
     }
 
-    const brand = (body.brand || existing?.brand || targetId).trim();
-    const finalPriceId = existing?.price_id || body.price_id || (minWattage !== null ? `RANGE_${brand.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_${minWattage}_${maxWattage}` : normalizeBrandToPriceId(brand));
+    const brandResolution = resolveApprovedSolarBrand(body.brand || existing?.brand || targetId);
+    if (!brandResolution.valid || !brandResolution.brand) {
+      return errorJson(brandResolution.error || 'العلامة التجارية غير معتمدة.', 400, request);
+    }
+    const brand = brandResolution.brand;
+    const finalPriceId =
+      existing?.price_id ||
+      body.price_id ||
+      (minWattage !== null && maxWattage !== null
+        ? buildRangePriceId(brand, minWattage, maxWattage)
+        : normalizeBrandToPriceId(brand));
 
     if (minWattage !== null || maxWattage !== null) {
-      if (minWattage === null || maxWattage === null || minWattage <= 0 || maxWattage < minWattage) {
-        return errorJson('يرجى إدخال نطاق قدرة صحيح بالوات (حد أدنى > 0 وحد أقصى >= الحد الأدنى)', 400, request);
+      if (
+        minWattage === null ||
+        maxWattage === null ||
+        !Number.isInteger(minWattage) ||
+        !Number.isInteger(maxWattage) ||
+        minWattage <= 0 ||
+        minWattage >= maxWattage
+      ) {
+        return errorJson('يرجى إدخال نطاق قدرة صحيح بالوات (حد أدنى > 0 وأقل تماماً من الحد الأقصى).', 400, request);
       }
 
-      // 1. Try atomic UPDATE excluding current finalPriceId
-      const updateResult: any = await env.DB.prepare(`
-        UPDATE energy_exchange_prices
-        SET
-          brand = ?,
-          min_wattage = ?,
-          max_wattage = ?,
-          price_per_watt = ?,
-          effective_date = DATE('now'),
-          updated_at = datetime('now'),
-          updated_by = ?
-        WHERE price_id = ?
-          AND NOT EXISTS (
-            SELECT 1 FROM energy_exchange_prices
-            WHERE brand = ? COLLATE NOCASE
-              AND price_id != ?
-              AND min_wattage IS NOT NULL
-              AND max_wattage IS NOT NULL
-              AND min_wattage <= ?
-              AND max_wattage >= ?
-          )
-      `).bind(
-        brand,
-        minWattage,
-        maxWattage,
-        roundedPrice,
-        updatedBy,
-        finalPriceId,
-        brand,
-        finalPriceId,
-        maxWattage,
-        minWattage
-      ).run();
+      // 1. Atomic UPDATE excluding current finalPriceId with overlap check
+      const updateResult: any = await env.DB.prepare(
+        `UPDATE energy_exchange_prices
+         SET
+           brand = ?,
+           min_wattage = ?,
+           max_wattage = ?,
+           price_per_watt = ?,
+           effective_date = DATE('now'),
+           updated_at = datetime('now'),
+           updated_by = ?
+         WHERE price_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM energy_exchange_prices
+             WHERE brand = ? COLLATE NOCASE
+               AND price_id != ?
+               AND min_wattage IS NOT NULL
+               AND max_wattage IS NOT NULL
+               AND min_wattage <= ?
+               AND max_wattage >= ?
+           )`
+      )
+        .bind(
+          brand,
+          minWattage,
+          maxWattage,
+          roundedPrice,
+          updatedBy,
+          finalPriceId,
+          brand,
+          finalPriceId,
+          maxWattage,
+          minWattage
+        )
+        .run();
 
       const changes = updateResult.meta?.changes ?? updateResult.changes ?? 0;
       if (changes > 0) {
-        return successJson({
-          message: 'تم تحديث نطاق السعر بنجاح في بورصة الطاقة',
+        return successJson(
+          {
+            message: 'تم تحديث نطاق السعر بنجاح في بورصة الطاقة',
+            price_id: finalPriceId,
+            brand,
+            min_wattage: minWattage,
+            max_wattage: maxWattage,
+            price_per_watt: roundedPrice,
+            updated_at: nowIso,
+            updated_by: updatedBy,
+          },
+          200,
+          request
+        );
+      }
+
+      const recordExists = await env.DB.prepare('SELECT price_id FROM energy_exchange_prices WHERE price_id = ?')
+        .bind(finalPriceId)
+        .first();
+
+      if (recordExists) {
+        return errorJson(`تعذر التعديل: نطاق القدرة (${minWattage} - ${maxWattage} وات) يتداخل مع نطاق موجود لماركة ${brand}`, 409, request);
+      }
+
+      // 2. Atomic UPSERT INSERT enforcing max 3 ranges and zero overlap
+      const insertResult: any = await env.DB.prepare(
+        `INSERT INTO energy_exchange_prices (
+           price_id, category, brand, product_type, price_per_watt, currency, min_wattage, max_wattage, effective_date, updated_at, updated_by
+         )
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, DATE('now'), datetime('now'), ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM energy_exchange_prices
+           WHERE brand = ? COLLATE NOCASE
+             AND min_wattage IS NOT NULL
+             AND max_wattage IS NOT NULL
+             AND min_wattage <= ?
+             AND max_wattage >= ?
+         )
+         AND (
+           SELECT COUNT(*) FROM energy_exchange_prices
+           WHERE brand = ? COLLATE NOCASE
+             AND min_wattage IS NOT NULL
+             AND max_wattage IS NOT NULL
+         ) < 3`
+      )
+        .bind(
+          finalPriceId,
+          body.category || 'panels',
+          brand,
+          body.product_type || 'Solar Panel',
+          roundedPrice,
+          body.currency || 'EGP',
+          minWattage,
+          maxWattage,
+          updatedBy,
+          brand,
+          maxWattage,
+          minWattage,
+          brand
+        )
+        .run();
+
+      const insertChanges = insertResult.meta?.changes ?? insertResult.changes ?? 0;
+      if (insertChanges === 0) {
+        const countRow = await env.DB.prepare(
+          'SELECT COUNT(*) as cnt FROM energy_exchange_prices WHERE brand = ? COLLATE NOCASE AND min_wattage IS NOT NULL AND max_wattage IS NOT NULL'
+        )
+          .bind(brand)
+          .first<{ cnt: number }>();
+        if (countRow && countRow.cnt >= 3) {
+          return errorJson(`الحد الأقصى للنطاقات هو 3 نطاقات لكل علامة تجارية (${brand}).`, 400, request);
+        }
+        return errorJson(`تعذر الإضافة: نطاق القدرة (${minWattage} - ${maxWattage} وات) يتداخل مع نطاق موجود لماركة ${brand}`, 409, request);
+      }
+
+      return successJson(
+        {
+          message: 'تم إضافة وتحديث نطاق السعر بنجاح في بورصة الطاقة',
           price_id: finalPriceId,
           brand,
           min_wattage: minWattage,
           max_wattage: maxWattage,
           price_per_watt: roundedPrice,
           updated_at: nowIso,
-          updated_by: updatedBy
-        }, 200, request);
-      }
-
-      // 2. If update changes === 0, check if record exists in D1
-      const recordExists = await env.DB.prepare(
-        'SELECT price_id FROM energy_exchange_prices WHERE price_id = ?'
-      ).bind(finalPriceId).first();
-
-      if (recordExists) {
-        // Record exists, so changes === 0 means OVERLAP CONFLICT
-        return errorJson(`تعذر التعديل: نطاق القدرة (${minWattage} - ${maxWattage} وات) يتداخل مع نطاق موجود لماركة ${brand}`, 409, request);
-      }
-
-      // 3. Record does not exist in D1 yet -> Perform Atomic INSERT (Upsert)
-      const insertResult: any = await env.DB.prepare(`
-        INSERT INTO energy_exchange_prices (
-          price_id, category, brand, product_type, price_per_watt, currency, min_wattage, max_wattage, effective_date, updated_at, updated_by
-        )
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, DATE('now'), datetime('now'), ?
-        WHERE NOT EXISTS (
-          SELECT 1 FROM energy_exchange_prices
-          WHERE brand = ? COLLATE NOCASE
-            AND min_wattage IS NOT NULL
-            AND max_wattage IS NOT NULL
-            AND min_wattage <= ?
-            AND max_wattage >= ?
-        )
-      `).bind(
-        finalPriceId,
-        body.category || 'panels',
-        brand,
-        body.product_type || 'Solar Panel',
-        roundedPrice,
-        body.currency || 'EGP',
-        minWattage,
-        maxWattage,
-        updatedBy,
-        brand,
-        maxWattage,
-        minWattage
-      ).run();
-
-      const insertChanges = insertResult.meta?.changes ?? insertResult.changes ?? 0;
-      if (insertChanges === 0) {
-        return errorJson(`تعذر الإضافة: نطاق القدرة (${minWattage} - ${maxWattage} وات) يتداخل مع نطاق موجود لماركة ${brand}`, 409, request);
-      }
-
-      return successJson({
-        message: 'تم إضافة وتحديث نطاق السعر بنجاح في بورصة الطاقة',
-        price_id: finalPriceId,
-        brand,
-        min_wattage: minWattage,
-        max_wattage: maxWattage,
-        price_per_watt: roundedPrice,
-        updated_at: nowIso,
-        updated_by: updatedBy
-      }, 200, request);
+          updated_by: updatedBy,
+        },
+        200,
+        request
+      );
     }
 
-    // Standard flat price update (legacy)
+    // Legacy flat price update (only when updating an existing flat record without wattage bounds)
     if (existing) {
-      await env.DB.prepare(`
-        UPDATE energy_exchange_prices SET
+      await env.DB.prepare(
+        `UPDATE energy_exchange_prices SET
           price_per_watt = ?,
           effective_date = DATE('now'),
           updated_at = datetime('now'),
           updated_by = ?
-        WHERE price_id = ?
-      `).bind(roundedPrice, updatedBy, existing.price_id).run();
+         WHERE price_id = ?`
+      )
+        .bind(roundedPrice, updatedBy, existing.price_id)
+        .run();
 
-      return successJson({
-        message: 'Price updated successfully in Cloudflare D1',
-        price_id: existing.price_id,
-        brand: existing.brand,
-        price_per_watt: roundedPrice,
-        updated_at: nowIso,
-        updated_by: updatedBy
-      }, 200, request);
+      return successJson(
+        {
+          message: 'Price updated successfully in Cloudflare D1',
+          price_id: existing.price_id,
+          brand: existing.brand,
+          price_per_watt: roundedPrice,
+          updated_at: nowIso,
+          updated_by: updatedBy,
+        },
+        200,
+        request
+      );
     }
 
-    await env.DB.prepare(`
-      INSERT INTO energy_exchange_prices (
-        price_id, category, brand, product_type, price_per_watt, currency, effective_date, updated_at, updated_by
-      ) VALUES (?, ?, ?, ?, ?, ?, DATE('now'), datetime('now'), ?)
-      ON CONFLICT(price_id) DO UPDATE SET
-        price_per_watt = excluded.price_per_watt,
-        updated_at = datetime('now'),
-        updated_by = excluded.updated_by
-    `).bind(
-      finalPriceId,
-      body.category || 'panels',
-      brand,
-      body.product_type || 'Solar Panel',
-      roundedPrice,
-      body.currency || 'EGP',
-      updatedBy
-    ).run();
-
-    return successJson({
-      message: 'Price updated successfully in Cloudflare D1',
-      price_id: finalPriceId,
-      brand,
-      price_per_watt: roundedPrice,
-      updated_at: nowIso,
-      updated_by: updatedBy
-    }, 200, request);
+    return errorJson('يجب تحديد نطاق القدرة (الحد الأدنى والأقصى بالوات) عند إنشاء سجل جديد.', 400, request);
   }
 
-  // 4. POST: Protected (Admin only) - Create range or price record
+  // 4. POST: Protected (Admin only) - Create wattage range record
   if (method === 'POST') {
     const authResult = await authenticateUser(request, env);
-    const adminCheck = requireAdmin(authResult);
+    const adminCheck = requireAdmin(authResult, request);
     if (!adminCheck.allowed) return adminCheck.response!;
 
     let body: any;
@@ -4065,45 +4374,59 @@ async function handleEnergyExchange(request: Request, env: Env, path: string, me
       return errorJson('Invalid JSON payload in request body', 400, request);
     }
 
-    // Extract updatedBy strictly from authenticated user token identity
+    // Strictly derive updatedBy from verified Firebase token — never trust body fields
     const updatedBy = authResult.user?.email || authResult.user?.uid || 'admin';
 
-    // Range Insertion
+    const brandResolution = resolveApprovedSolarBrand(body.brand);
+    if (!brandResolution.valid || !brandResolution.brand) {
+      return errorJson(brandResolution.error || 'العلامة التجارية غير معتمدة.', 400, request);
+    }
+    const brand = brandResolution.brand;
+
     const minWattage = body.min_wattage !== undefined && body.min_wattage !== null ? Number(body.min_wattage) : null;
     const maxWattage = body.max_wattage !== undefined && body.max_wattage !== null ? Number(body.max_wattage) : null;
 
-    if (minWattage !== null || maxWattage !== null) {
-      if (minWattage === null || maxWattage === null || minWattage <= 0 || maxWattage < minWattage) {
-        return errorJson('يرجى إدخال نطاق قدرة صحيح بالوات (حد أدنى > 0 وحد أقصى >= الحد الأدنى)', 400, request);
-      }
+    if (
+      minWattage === null ||
+      maxWattage === null ||
+      !Number.isInteger(minWattage) ||
+      !Number.isInteger(maxWattage) ||
+      minWattage <= 0 ||
+      minWattage >= maxWattage
+    ) {
+      return errorJson('يرجى إدخال نطاق قدرة صحيح بالوات (حد أدنى > 0 وأقل تماماً من الحد الأقصى).', 400, request);
+    }
 
-      const pricePerWatt = Number(body.price_per_watt ?? body.pricePerWatt);
-      if (!Number.isFinite(pricePerWatt) || pricePerWatt <= 0 || pricePerWatt > 200) {
-        return errorJson('Invalid pricePerWatt. Must be a valid positive number between 0 and 200.', 400, request);
-      }
+    const pricePerWatt = Number(body.price_per_watt ?? body.pricePerWatt);
+    if (!Number.isFinite(pricePerWatt) || pricePerWatt <= 0 || pricePerWatt > 200) {
+      return errorJson('Invalid pricePerWatt. Must be a valid positive number between 0 and 200.', 400, request);
+    }
 
-      const roundedPrice = parseFloat(pricePerWatt.toFixed(2));
-      const brand = (body.brand || '').trim();
-      if (!brand) return errorJson('Brand name is required', 400, request);
+    const roundedPrice = parseFloat(pricePerWatt.toFixed(2));
+    const priceId = body.price_id || buildRangePriceId(brand, minWattage, maxWattage);
 
-      const cleanBrand = brand.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-      const priceId = body.price_id || `RANGE_${cleanBrand}_${minWattage}_${maxWattage}`;
-
-      // Single-statement ATOMIC insertion with overlap prevention
-      const insertResult: any = await env.DB.prepare(`
-        INSERT INTO energy_exchange_prices (
-          price_id, category, brand, product_type, price_per_watt, currency, min_wattage, max_wattage, effective_date, updated_at, updated_by
-        )
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?, DATE('now'), datetime('now'), ?
-        WHERE NOT EXISTS (
-          SELECT 1 FROM energy_exchange_prices
-          WHERE brand = ? COLLATE NOCASE
-            AND min_wattage IS NOT NULL
-            AND max_wattage IS NOT NULL
-            AND min_wattage <= ?
-            AND max_wattage >= ?
-        )
-      `).bind(
+    // Single-statement ATOMIC insertion enforcing max 3 ranges and zero overlap
+    const insertResult: any = await env.DB.prepare(
+      `INSERT INTO energy_exchange_prices (
+         price_id, category, brand, product_type, price_per_watt, currency, min_wattage, max_wattage, effective_date, updated_at, updated_by
+       )
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, DATE('now'), datetime('now'), ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM energy_exchange_prices
+         WHERE brand = ? COLLATE NOCASE
+           AND min_wattage IS NOT NULL
+           AND max_wattage IS NOT NULL
+           AND min_wattage <= ?
+           AND max_wattage >= ?
+       )
+       AND (
+         SELECT COUNT(*) FROM energy_exchange_prices
+         WHERE brand = ? COLLATE NOCASE
+           AND min_wattage IS NOT NULL
+           AND max_wattage IS NOT NULL
+       ) < 3`
+    )
+      .bind(
         priceId,
         body.category || 'panels',
         brand,
@@ -4115,66 +4438,43 @@ async function handleEnergyExchange(request: Request, env: Env, path: string, me
         updatedBy,
         brand,
         maxWattage,
-        minWattage
-      ).run();
+        minWattage,
+        brand
+      )
+      .run();
 
-      const changes = insertResult.meta?.changes ?? insertResult.changes ?? 0;
-      if (changes === 0) {
-        // Check if it failed due to existing price_id or range overlap
-        const checkExistingId = await env.DB.prepare('SELECT price_id FROM energy_exchange_prices WHERE price_id = ?').bind(priceId).first();
-        if (checkExistingId) {
-          return errorJson(`رمز السعر مفتاح مكرر: ${priceId}`, 409, request);
-        }
-        return errorJson(`تعذر الإضافة: نطاق القدرة (${minWattage} - ${maxWattage} وات) يتداخل مع نطاق موجود لـ ${brand}`, 409, request);
+    const changes = insertResult.meta?.changes ?? insertResult.changes ?? 0;
+    if (changes === 0) {
+      const checkExistingId = await env.DB.prepare('SELECT price_id FROM energy_exchange_prices WHERE price_id = ?')
+        .bind(priceId)
+        .first();
+      if (checkExistingId) {
+        return errorJson(`رمز السعر مفتاح مكرر: ${priceId}`, 409, request);
       }
+      const countRow = await env.DB.prepare(
+        'SELECT COUNT(*) as cnt FROM energy_exchange_prices WHERE brand = ? COLLATE NOCASE AND min_wattage IS NOT NULL AND max_wattage IS NOT NULL'
+      )
+        .bind(brand)
+        .first<{ cnt: number }>();
+      if (countRow && countRow.cnt >= 3) {
+        return errorJson(`الحد الأقصى للنطاقات هو 3 نطاقات لكل علامة تجارية (${brand}).`, 400, request);
+      }
+      return errorJson(`تعذر الإضافة: نطاق القدرة (${minWattage} - ${maxWattage} وات) يتداخل مع نطاق موجود لـ ${brand}`, 409, request);
+    }
 
-      return successJson({
+    return successJson(
+      {
         message: 'تم إضافة نطاق السعر بنجاح في بورصة الطاقة',
         price_id: priceId,
         brand,
         min_wattage: minWattage,
         max_wattage: maxWattage,
-        price_per_watt: roundedPrice
-      }, 200, request);
-    }
-
-    // Single brand flat update (legacy)
-    if (body.brand && (body.price_per_watt !== undefined || body.pricePerWatt !== undefined)) {
-      const pricePerWatt = Number(body.price_per_watt ?? body.pricePerWatt);
-      if (!Number.isFinite(pricePerWatt) || pricePerWatt <= 0 || pricePerWatt > 200) {
-        return errorJson('Invalid pricePerWatt. Must be a valid positive number between 0 and 200.', 400, request);
-      }
-      const roundedPrice = parseFloat(pricePerWatt.toFixed(2));
-      const brand = body.brand.trim();
-      const priceId = body.price_id || normalizeBrandToPriceId(brand);
-
-      await env.DB.prepare(`
-        INSERT INTO energy_exchange_prices (
-          price_id, category, brand, product_type, price_per_watt, currency, effective_date, updated_at, updated_by
-        ) VALUES (?, ?, ?, ?, ?, ?, DATE('now'), datetime('now'), ?)
-        ON CONFLICT(price_id) DO UPDATE SET
-          price_per_watt = excluded.price_per_watt,
-          updated_at = datetime('now'),
-          updated_by = excluded.updated_by
-      `).bind(
-        priceId,
-        body.category || 'panels',
-        brand,
-        body.product_type || 'Solar Panel',
-        roundedPrice,
-        body.currency || 'EGP',
-        updatedBy
-      ).run();
-
-      return successJson({
-        message: 'Price record created/updated successfully in Cloudflare D1',
-        price_id: priceId,
-        brand,
-        price_per_watt: roundedPrice
-      }, 200, request);
-    }
-
-    return errorJson('Missing valid brand, price, or wattage range object', 400, request);
+        price_per_watt: roundedPrice,
+        updated_by: updatedBy,
+      },
+      200,
+      request
+    );
   }
 
   return errorJson(`Method ${method} not allowed for /energy-exchange`, 405, request);

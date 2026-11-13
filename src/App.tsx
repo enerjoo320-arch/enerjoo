@@ -38,8 +38,10 @@ import {
 } from './services/firestoreService';
 import { 
   getInitialExchangePrices, 
+  getInitialExchangeRecords,
   subscribeToEnergyExchange, 
-  applySolarPanelPricingToProducts 
+  applySolarPanelPricingToProducts,
+  EnergyExchangeRecord
 } from './services/energyExchangeService';
 import { InverterFilterCriteria } from './types/inverter';
 import { classifyInverter } from './utils/inverterClassification';
@@ -71,12 +73,13 @@ export default function App() {
   const [view, setView] = useState<ViewType>(initialNav.view);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [exchangePrices, setExchangePrices] = useState<Record<string, number>>(getInitialExchangePrices);
+  const [exchangeRecords, setExchangeRecords] = useState<EnergyExchangeRecord[]>(getInitialExchangeRecords);
   const [rawProducts, setRawProducts] = useState<Product[]>([]);
   const setProducts = setRawProducts;
   const products = useMemo(() => {
     const uniqueRaw = deduplicateProducts(rawProducts);
-    return applySolarPanelPricingToProducts(uniqueRaw, exchangePrices);
-  }, [rawProducts, exchangePrices]);
+    return applySolarPanelPricingToProducts(uniqueRaw, exchangePrices, exchangeRecords);
+  }, [rawProducts, exchangePrices, exchangeRecords]);
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -474,7 +477,10 @@ export default function App() {
       }
     });
     const unsubSuppliers = subscribeToSuppliers(setSuppliers);
-    const unsubExchange = subscribeToEnergyExchange(setExchangePrices);
+    const unsubExchange = subscribeToEnergyExchange((prices, records) => {
+      setExchangePrices(prices);
+      if (records) setExchangeRecords(records);
+    });
     return () => {
       unsubProducts();
       unsubSuppliers();
@@ -1152,7 +1158,8 @@ export default function App() {
           <EnergyExchange 
             lang={lang} 
             user={user} 
-            prices={exchangePrices} 
+            prices={exchangePrices}
+            records={exchangeRecords}
             onNavigateToBrandProducts={(brandName) => {
               setActiveFilters({ category: 'panels', sort: 'power' });
               setSearchTerm(brandName);
