@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   TrendingUp,
   Edit2,
@@ -247,7 +248,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
   onNavigateToBrandProducts,
 }) => {
   const isAr = lang === 'ar';
-  const isAdmin = user?.type === 'admin';
+  const isAdmin = String(user?.type || '').toLowerCase().trim() === 'admin';
 
   // Live Exchange Data & Sync Status State
   const [livePrices, setLivePrices] = useState<Record<string, number>>(initialPrices);
@@ -346,6 +347,8 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
   const [adminLogoMarkedRemoval, setAdminLogoMarkedRemoval] = useState<boolean>(false);
   const [adminLogoUploadStatus, setAdminLogoUploadStatus] = useState<string | null>(null);
   const [adminModalError, setAdminModalError] = useState<string | null>(null);
+  const [adminModalLoadError, setAdminModalLoadError] = useState<string | null>(null);
+  const [isAdminModalLoading, setIsAdminModalLoading] = useState(false);
   const [isAdminSaving, setIsAdminSaving] = useState(false);
 
   const revokeBlobPreviewUrl = (url?: string | null) => {
@@ -525,33 +528,62 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
     setSelectedFeaturesBrand(null);
   };
 
-  // Handlers for Admin Brand Management Modal (Ranges + Activation + Logo)
-  const handleOpenAdminEdit = (brand: SolarPanelBrand) => {
-    const brandRecords = recordsByBrand[brand] || [];
-    const existingRanges = brandRecords
-      .filter(r => r.min_wattage != null && r.max_wattage != null)
-      .sort((a, b) => (a.min_wattage ?? 0) - (b.min_wattage ?? 0));
+  // Close open modals on Escape
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (editingBrandForAdmin && !isAdminSaving) {
+        handleCloseAdminEdit();
+      } else if (selectedFeaturesBrand) {
+        handleCloseFeatures();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [editingBrandForAdmin, selectedFeaturesBrand, isAdminSaving]);
 
-    const existingLegacy = brandRecords.find(r => r.min_wattage == null || r.max_wattage == null);
+  const populateAdminModalFromRecords = (brand: SolarPanelBrand, sourceRecords: EnergyExchangeRecord[]) => {
+    const brandRecords = sourceRecords.filter(r => {
+      if (!r.brand) return false;
+      const matched = SOLAR_PANEL_BRANDS.find(sb => sb.toLowerCase() === r.brand.toLowerCase());
+      return matched === brand;
+    });
+
+    const existingRanges = brandRecords
+      .filter(
+        r =>
+          r.min_wattage != null &&
+          r.max_wattage != null &&
+          Number.isFinite(Number(r.min_wattage)) &&
+          Number.isFinite(Number(r.max_wattage))
+      )
+      .sort((a, b) => Number(a.min_wattage ?? 0) - Number(b.min_wattage ?? 0));
+
+    const existingLegacy = brandRecords.find(
+      r => (r.min_wattage == null || r.max_wattage == null) && Number(r.price_per_watt) > 0
+    );
     const hasAnyRecords = brandRecords.length > 0;
     const isCurrentlyActive = hasAnyRecords ? brandRecords.some(isExchangeRecordActive) : true;
 
     let nextEditableRanges: EditableRangeItem[];
     if (existingRanges.length > 0) {
-      nextEditableRanges = existingRanges.map(r => ({
-        priceId: r.price_id,
-        minWattage: String(r.min_wattage),
-        maxWattage: String(r.max_wattage),
-        pricePerWatt: r.price_per_watt.toFixed(2),
-      }));
-    } else if (existingLegacy && existingLegacy.price_per_watt > 0) {
+      nextEditableRanges = existingRanges.slice(0, 3).map(r => {
+        const pNum = Number(r.price_per_watt);
+        return {
+          priceId: r.price_id,
+          minWattage: String(r.min_wattage),
+          maxWattage: String(r.max_wattage),
+          pricePerWatt: Number.isFinite(pNum) && pNum > 0 ? pNum.toFixed(2) : '',
+        };
+      });
+    } else if (existingLegacy && Number(existingLegacy.price_per_watt) > 0) {
       // Legacy price exists without wattage bounds: keep price, require admin to specify real wattage bounds
       nextEditableRanges = [
         {
           priceId: undefined,
           minWattage: '',
           maxWattage: '',
-          pricePerWatt: existingLegacy.price_per_watt.toFixed(2),
+          pricePerWatt: Number(existingLegacy.price_per_watt).toFixed(2),
         },
       ];
     } else {
@@ -566,9 +598,6 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
       ];
     }
 
-    revokeBlobPreviewUrl(adminLogoPreviewUrl);
-    const savedLogo = brandLogos[brand] || null;
-
     setAdminRanges(nextEditableRanges);
     setInitialRangesSnapshot(
       JSON.stringify(
@@ -581,12 +610,64 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
     );
     setAdminBrandIsActive(isCurrentlyActive);
     setInitialActiveSnapshot(isCurrentlyActive);
+  };
+
+  // Handlers for Admin Brand Management Modal (Ranges + Activation + Logo)
+  const handleOpenAdminEdit = async (brand: SolarPanelBrand) => {
+    revokeBlobPreviewUrl(adminLogoPreviewUrl);
+    const savedLogo = brandLogos[brand] || null;
+
     setAdminLogoFile(null);
     setAdminLogoPreviewUrl(savedLogo);
     setAdminLogoMarkedRemoval(false);
     setAdminLogoUploadStatus(null);
-    setEditingBrandForAdmin(brand);
     setAdminModalError(null);
+    setAdminModalLoadError(null);
+    setEditingBrandForAdmin(brand);
+
+    if (exchangeState.status === 'ready') {
+      setIsAdminModalLoading(false);
+      populateAdminModalFromRecords(brand, liveRecords);
+      return;
+    }
+
+    // If initial exchange fetch failed or is still loading, immediately retry loading from D1
+    // so clicking "Edit" always opens a responsive modal and never silently does nothing.
+    setIsAdminModalLoading(true);
+    setAdminRanges([]);
+    const freshState = await refreshEnergyExchange();
+    setIsAdminModalLoading(false);
+
+    if (freshState.status === 'ready') {
+      setAdminModalLoadError(null);
+      populateAdminModalFromRecords(brand, freshState.records);
+    } else {
+      setAdminModalLoadError(
+        freshState.error ||
+          (isAr
+            ? 'تعذر تحميل النطاقات الحالية من قاعدة البيانات. يرجى المحاولة مرة أخرى قبل الحفظ لتفادي فقدان بيانات سابقة.'
+            : 'Failed to load current ranges from the database. Please retry before saving.')
+      );
+    }
+  };
+
+  const handleRetryModalLoad = async () => {
+    if (!editingBrandForAdmin || isAdminModalLoading) return;
+    setIsAdminModalLoading(true);
+    setAdminModalLoadError(null);
+    const freshState = await refreshEnergyExchange();
+    setIsAdminModalLoading(false);
+
+    if (freshState.status === 'ready') {
+      populateAdminModalFromRecords(editingBrandForAdmin, freshState.records);
+    } else {
+      setAdminModalLoadError(
+        freshState.error ||
+          (isAr
+            ? 'تعذر تحميل النطاقات الحالية من قاعدة البيانات. يرجى المحاولة مرة أخرى.'
+            : 'Failed to load current ranges from the database. Please retry.')
+      );
+    }
   };
 
   const handleCloseAdminEdit = () => {
@@ -600,6 +681,8 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
     setAdminLogoMarkedRemoval(false);
     setAdminLogoUploadStatus(null);
     setAdminModalError(null);
+    setAdminModalLoadError(null);
+    setIsAdminModalLoading(false);
   };
 
   const handleSelectLogoFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -715,23 +798,26 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
 
       for (let i = 0; i < adminRanges.length; i++) {
         const item = adminRanges[i];
-        const minW = parseInt(item.minWattage.trim(), 10);
-        const maxW = parseInt(item.maxWattage.trim(), 10);
-        const price = parseFloat(item.pricePerWatt.trim());
+        const minRaw = item.minWattage.trim();
+        const maxRaw = item.maxWattage.trim();
+        const priceRaw = item.pricePerWatt.trim();
+        const minW = minRaw ? Number(minRaw) : NaN;
+        const maxW = maxRaw ? Number(maxRaw) : NaN;
+        const price = priceRaw ? Number(priceRaw) : NaN;
 
-        if (isNaN(minW) || minW <= 0) {
-          setAdminModalError(`النطاق ${i + 1}: الحد الأدنى للقدرة غير صالح. يجب أن يكون رقماً موجباً أكبر من 0.`);
+        if (!Number.isInteger(minW) || minW <= 0) {
+          setAdminModalError(`النطاق ${i + 1}: الحد الأدنى للقدرة غير صالح. يجب أن يكون رقماً صحيحاً موجباً أكبر من 0.`);
           return;
         }
-        if (isNaN(maxW) || maxW <= 0) {
-          setAdminModalError(`النطاق ${i + 1}: الحد الأقصى للقدرة غير صالح. يجب أن يكون رقماً موجباً أكبر من 0.`);
+        if (!Number.isInteger(maxW) || maxW <= 0) {
+          setAdminModalError(`النطاق ${i + 1}: الحد الأقصى للقدرة غير صالح. يجب أن يكون رقماً صحيحاً موجباً أكبر من 0.`);
           return;
         }
         if (minW >= maxW) {
           setAdminModalError(`النطاق ${i + 1}: الحد الأدنى (${minW} وات) يجب أن يكون أقل تماماً من الحد الأقصى (${maxW} وات).`);
           return;
         }
-        if (isNaN(price) || price <= 0 || price > 200) {
+        if (!Number.isFinite(price) || price <= 0 || price > 200) {
           setAdminModalError(`النطاق ${i + 1}: سعر الوات غير صالح. يجب أن يكون رقماً بين 0.1 و 200 ج.م.`);
           return;
         }
@@ -1353,7 +1439,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                           <td className="py-4 px-6 text-center align-middle">
                             <div className="inline-flex items-baseline gap-1 font-mono tabular-nums">
                               <span className={`text-lg font-extrabold ${isBrandInactive ? 'text-slate-400 line-through' : 'text-blue-600'}`}>
-                                {range.price_per_watt.toFixed(2)}
+                                {Number.isFinite(Number(range.price_per_watt)) ? Number(range.price_per_watt).toFixed(2) : '—'}
                               </span>
                               <span className="text-xs font-bold text-slate-600 font-sans">
                                 {isAr ? 'ج.م/وات' : 'EGP/W'}
@@ -1457,7 +1543,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                           ) : legacyRec ? (
                             <div className="inline-flex items-baseline gap-1 font-mono tabular-nums">
                               <span className={`text-lg font-extrabold ${isBrandInactive ? 'text-slate-400 line-through' : 'text-blue-600'}`}>
-                                {legacyRec.price_per_watt.toFixed(2)}
+                                {Number.isFinite(Number(legacyRec.price_per_watt)) ? Number(legacyRec.price_per_watt).toFixed(2) : '—'}
                               </span>
                               <span className="text-xs font-bold text-slate-600 font-sans">
                                 {isAr ? 'ج.م/وات' : 'EGP/W'}
@@ -1487,8 +1573,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                               <button
                                 type="button"
                                 onClick={() => handleOpenAdminEdit(brand)}
-                                disabled={isApiError}
-                                className="w-full sm:w-auto px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 whitespace-nowrap disabled:opacity-50"
+                                className="w-full sm:w-auto px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-95 whitespace-nowrap"
                                 title={isAr ? `تحديد نطاقات وأسعار ${brand}` : `Set ${brand} Ranges`}
                               >
                                 <Edit2 size={13} className="text-amber-700 shrink-0" />
@@ -1508,9 +1593,15 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
       )}
 
       {/* 6. Brand Features Modal (Available to Customer, Supplier, and Admin) */}
-      {selectedFeaturesBrand && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-100 relative">
+      {selectedFeaturesBrand && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in"
+          dir={isAr ? 'rtl' : 'ltr'}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseFeatures();
+          }}
+        >
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-100 relative max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
               <div className="flex items-center gap-3">
                 {(() => {
@@ -1604,12 +1695,19 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* 7. Admin Manage Ranges Dialog (Admin Only) */}
-      {isAdmin && editingBrandForAdmin && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in">
+      {isAdmin && editingBrandForAdmin && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fade-in"
+          dir={isAr ? 'rtl' : 'ltr'}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isAdminSaving) handleCloseAdminEdit();
+          }}
+        >
           <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl border border-slate-100 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-100">
               <div className="flex items-center gap-3">
@@ -1636,6 +1734,39 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
               </button>
             </div>
 
+            {isAdminModalLoading ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-3 text-slate-600">
+                <RefreshCw size={24} className="animate-spin text-blue-600" />
+                <span className="text-xs font-bold">
+                  {isAr ? `جاري تحميل النطاقات والأسعار الحالية لعلامة ${editingBrandForAdmin}...` : `Loading current ranges for ${editingBrandForAdmin}...`}
+                </span>
+              </div>
+            ) : adminModalLoadError ? (
+              <div className="my-4 p-5 bg-red-50 border border-red-200 rounded-2xl text-red-900 flex flex-col gap-3">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle size={18} className="text-red-600 shrink-0 mt-0.5" />
+                  <div className="text-xs font-semibold leading-relaxed">{adminModalLoadError}</div>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCloseAdminEdit}
+                    className="px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 cursor-pointer"
+                  >
+                    {isAr ? 'إغلاق' : 'Close'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRetryModalLoad}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCw size={13} />
+                    <span>{isAr ? 'إعادة المحاولة' : 'Retry'}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+            <>
             {adminModalError && (
               <div className="mb-5 p-3.5 bg-red-50 border border-red-200 text-red-700 text-xs font-semibold rounded-2xl flex items-start gap-2">
                 <AlertTriangle size={16} className="shrink-0 mt-0.5" />
@@ -1841,7 +1972,7 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                         <div className="relative">
                           <input
                             type="number"
-                            step="0.05"
+                            step="0.01"
                             min="0.1"
                             max="200"
                             value={rangeItem.pricePerWatt}
@@ -1907,8 +2038,11 @@ export const EnergyExchange: React.FC<EnergyExchangeProps> = ({
                 </span>
               </button>
             </div>
+            </>
+            )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
