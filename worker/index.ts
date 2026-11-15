@@ -57,7 +57,9 @@ export interface Env {
   R2?: R2Bucket;
   GOOGLE_SERVICE_ACCOUNT_JSON?: string;
   PRODUCT_ADMIN_EMAILS?: string;
+  ADMIN_EMAILS?: string;
   PRODUCT_ADMIN_UIDS?: string;
+  ADMIN_UIDS?: string;
   FIREBASE_PROJECT_ID?: string;
   N8N_CHAT_ENABLED?: string;
   N8N_WEBHOOK_URL?: string;
@@ -989,6 +991,155 @@ export const authorizeProductWrite = async (
 };
 
 export const verifyWorkerProductPublisher = authorizeProductWrite;
+
+export interface EnergyExchangeAdminAuthResult {
+  allowed: boolean;
+  status: number;
+  code: string;
+  message: string;
+  uid?: string;
+  email?: string;
+  role?: 'admin';
+  response?: Response;
+}
+
+function parseAllowlistCsv(raw?: string, lowercase = false): string[] {
+  if (!raw || typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map(item => (lowercase ? item.trim().toLowerCase() : item.trim()))
+    .filter(Boolean);
+}
+
+/**
+ * Independent Admin-only Authorization for Energy Exchange Write Operations.
+ *
+ * Security & Isolation Guarantees:
+ * 1. Cryptographically verifies Firebase ID Token (RS256 via Google JWKS).
+ * 2. Extracts uid, email, emailVerified strictly from the verified JWT (never from request body).
+ * 3. Checks Admin allowlists from Worker environment & config:
+ *    PRODUCT_ADMIN_UIDS, ADMIN_UIDS, PRODUCT_ADMIN_EMAILS, ADMIN_EMAILS
+ * 4. Compares emails case-insensitively with mandatory email_verified enforcement.
+ * 5. Rejects all non-admins (suppliers, customers, excluded accounts) with HTTP 403 ADMIN_REQUIRED.
+ * 6. NEVER calls fetchAuthoritativeFirestoreUser or any supplier/Firestore verification.
+ * 7. Returns explicit ADMIN_AUTH_NOT_CONFIGURED (500) if admin allowlists are missing.
+ */
+export async function authorizeEnergyExchangeAdmin(
+  request: Request,
+  env: Env,
+  options?: { useDefaultAllowlists?: boolean }
+): Promise<EnergyExchangeAdminAuthResult> {
+  const buildError = (
+    status: number,
+    code: string,
+    message: string
+  ): EnergyExchangeAdminAuthResult => ({
+    allowed: false,
+    status,
+    code,
+    message,
+    response: json(
+      {
+        ok: false,
+        success: false,
+        error: {
+          code,
+          message,
+        },
+      },
+      status,
+      request
+    ),
+  });
+
+  const authHeader =
+    request.headers.get('Authorization') || request.headers.get('X-Firebase-Auth') || '';
+  const rawToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+
+  if (!rawToken) {
+    return buildError(
+      401,
+      'UNAUTHORIZED',
+      'سجّل الدخول إلى Enerjoo ثم أعد المحاولة.'
+    );
+  }
+
+  // 1. Cryptographic Firebase ID Token verification (no Firestore call)
+  const verifyResult = await verifyFirebaseIdToken(rawToken, env);
+  if (!verifyResult.valid || !verifyResult.token) {
+    return buildError(
+      verifyResult.status || 401,
+      verifyResult.code || 'UNAUTHORIZED',
+      verifyResult.message || 'رمز المصادقة غير صالح أو منتهي الصلاحية.'
+    );
+  }
+
+  // 2. Extract authoritative identity strictly from verified token
+  const uid = verifyResult.token.uid.trim();
+  const normalizedEmail = (verifyResult.token.email || '').toLowerCase().trim();
+  const emailVerified = verifyResult.token.emailVerified === true;
+  const claims = verifyResult.token.claims || {};
+
+  // 3. Resolve Admin allowlists (PRODUCT_ADMIN_UIDS, ADMIN_UIDS, PRODUCT_ADMIN_EMAILS, ADMIN_EMAILS)
+  const useDefaults = options?.useDefaultAllowlists !== false;
+  const allAdminEmails = Array.from(
+    new Set([
+      ...(useDefaults ? PRODUCT_ADMIN_EMAILS.map(e => e.trim().toLowerCase()).filter(Boolean) : []),
+      ...parseAllowlistCsv(env.PRODUCT_ADMIN_EMAILS, true),
+      ...parseAllowlistCsv(env.ADMIN_EMAILS, true),
+    ])
+  );
+  const allAdminUids = Array.from(
+    new Set([
+      ...(useDefaults ? PRODUCT_ADMIN_UIDS.map(u => u.trim()).filter(Boolean) : []),
+      ...parseAllowlistCsv(env.PRODUCT_ADMIN_UIDS, false),
+      ...parseAllowlistCsv(env.ADMIN_UIDS, false),
+    ])
+  );
+
+  // 4. Fail-closed with explicit error if admin allowlist settings are completely absent
+  if (allAdminEmails.length === 0 && allAdminUids.length === 0) {
+    return buildError(
+      500,
+      'ADMIN_AUTH_NOT_CONFIGURED',
+      'إعدادات صلاحيات مسؤولي بورصة الطاقة غير مهيأة في الخادم (ADMIN_AUTH_NOT_CONFIGURED).'
+    );
+  }
+
+  const excludedEmails = new Set(EXCLUDED_ADMIN_EMAILS.map(e => e.trim().toLowerCase()));
+  const isExcluded = Boolean(normalizedEmail) && excludedEmails.has(normalizedEmail);
+
+  const isAdminByUid = !isExcluded && allAdminUids.includes(uid);
+  const isEmailInAllowlist = !isExcluded && Boolean(normalizedEmail) && allAdminEmails.includes(normalizedEmail);
+  const isAdminByEmail = isEmailInAllowlist && emailVerified;
+  const isAdminByClaim = !isExcluded && (claims.admin === true || claims.role === 'admin');
+
+  if (isAdminByUid || isAdminByEmail || isAdminByClaim) {
+    return {
+      allowed: true,
+      status: 200,
+      code: 'OK',
+      message: 'Authorized Energy Exchange admin',
+      uid,
+      email: normalizedEmail || undefined,
+      role: 'admin',
+    };
+  }
+
+  if (isEmailInAllowlist && !emailVerified) {
+    return buildError(
+      403,
+      'ADMIN_REQUIRED',
+      'يتطلب تعديل بورصة الطاقة توثيق البريد الإلكتروني لحساب المسؤول أولاً.'
+    );
+  }
+
+  return buildError(
+    403,
+    'ADMIN_REQUIRED',
+    'هذه العملية مخصصة لمديري منصة Enerjoo فقط.'
+  );
+}
 
 // ============================================================================
 // Main Worker Fetch Handler
@@ -4059,9 +4210,8 @@ async function handleEnergyExchangeBrand(
   rawBrandParam: string,
   method: string
 ): Promise<Response> {
-  const authResult = await authenticateUser(request, env);
-  const adminCheck = requireAdmin(authResult, request);
-  if (!adminCheck.allowed) return adminCheck.response!;
+  const adminAuth = await authorizeEnergyExchangeAdmin(request, env);
+  if (!adminAuth.allowed) return adminAuth.response!;
 
   const brandResolution = resolveApprovedSolarBrand(rawBrandParam);
   if (!brandResolution.valid || !brandResolution.brand) {
@@ -4077,7 +4227,7 @@ async function handleEnergyExchangeBrand(
   }
 
   // Strictly derive identity from verified Firebase token — never trust body fields
-  const updatedBy = authResult.user?.email || authResult.user?.uid || 'admin';
+  const updatedBy = adminAuth.email || adminAuth.uid || 'admin';
   const hasIsActiveCol = await hasEnergyExchangeIsActiveColumn(env.DB);
 
   // Mode 1: Activation / Deactivation Toggle only (PATCH without ranges)
@@ -4350,9 +4500,8 @@ async function handleEnergyExchange(request: Request, env: Env, path: string, me
 
   // 2. DELETE: Protected (Admin only) - Delete optional range (Range 2 or 3)
   if (method === 'DELETE') {
-    const authResult = await authenticateUser(request, env);
-    const adminCheck = requireAdmin(authResult, request);
-    if (!adminCheck.allowed) return adminCheck.response!;
+    const adminAuth = await authorizeEnergyExchangeAdmin(request, env);
+    if (!adminAuth.allowed) return adminAuth.response!;
 
     if (!resourceId) {
       return errorJson('Missing record ID or price_id for deletion', 400, request);
@@ -4411,11 +4560,10 @@ async function handleEnergyExchange(request: Request, env: Env, path: string, me
     );
   }
 
-  // 3. PUT: Protected (Admin only) - Update or Upsert a range record
-  if (method === 'PUT') {
-    const authResult = await authenticateUser(request, env);
-    const adminCheck = requireAdmin(authResult, request);
-    if (!adminCheck.allowed) return adminCheck.response!;
+  // 3. PUT / PATCH: Protected (Admin only) - Update or Upsert a range record
+  if (method === 'PUT' || method === 'PATCH') {
+    const adminAuth = await authorizeEnergyExchangeAdmin(request, env);
+    if (!adminAuth.allowed) return adminAuth.response!;
 
     let body: any;
     try {
@@ -4436,7 +4584,7 @@ async function handleEnergyExchange(request: Request, env: Env, path: string, me
 
     const roundedPrice = parseFloat(pricePerWatt.toFixed(2));
     // Always derive updatedBy strictly from authenticated Firebase token
-    const updatedBy = authResult.user?.email || authResult.user?.uid || 'admin';
+    const updatedBy = adminAuth.email || adminAuth.uid || 'admin';
     const nowIso = new Date().toISOString();
 
     const minWattage = body.min_wattage !== undefined && body.min_wattage !== null ? Number(body.min_wattage) : null;
@@ -4782,9 +4930,8 @@ async function handleEnergyExchange(request: Request, env: Env, path: string, me
 
   // 4. POST: Protected (Admin only) - Create wattage range record
   if (method === 'POST') {
-    const authResult = await authenticateUser(request, env);
-    const adminCheck = requireAdmin(authResult, request);
-    if (!adminCheck.allowed) return adminCheck.response!;
+    const adminAuth = await authorizeEnergyExchangeAdmin(request, env);
+    if (!adminAuth.allowed) return adminAuth.response!;
 
     let body: any;
     try {
@@ -4794,7 +4941,7 @@ async function handleEnergyExchange(request: Request, env: Env, path: string, me
     }
 
     // Strictly derive updatedBy from verified Firebase token — never trust body fields
-    const updatedBy = authResult.user?.email || authResult.user?.uid || 'admin';
+    const updatedBy = adminAuth.email || adminAuth.uid || 'admin';
 
     const brandResolution = resolveApprovedSolarBrand(body.brand);
     if (!brandResolution.valid || !brandResolution.brand) {

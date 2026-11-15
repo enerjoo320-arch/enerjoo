@@ -3198,31 +3198,167 @@ ${urls.join("\n")}
     return previewFileWriteLock;
   }
 
-  // Authoritative server-side admin check relying purely on cryptographic Firebase token verification
+  // Independent server-side Energy Exchange Admin check relying purely on cryptographic Firebase token verification and admin allowlists (zero Firestore supplier lookups)
   async function isEnergyExchangeAdminAuthorizedServer(
     req: express.Request
-  ): Promise<{ authorized: boolean; status: number; code: string; email?: string; message?: string }> {
+  ): Promise<{ authorized: boolean; status: number; code: string; email?: string; uid?: string; message?: string }> {
     const authHeader = extractBearerAuthHeader(req);
     if (!authHeader) {
       return {
         authorized: false,
         status: 401,
         code: "UNAUTHORIZED",
-        message: "رمز المصادقة مطلوب. سجّل الدخول بحساب مسؤول ثم أعد المحاولة.",
+        message: "سجّل الدخول إلى Enerjoo ثم أعد المحاولة.",
       };
     }
 
-    const authRes = await verifyAuthorizedProductPublisher(authHeader, true);
-    if (!authRes.allowed || authRes.role !== "admin") {
+    const rawToken = authHeader.replace(/^Bearer\s+/i, "").trim();
+    const parts = rawToken.split(".");
+    if (parts.length !== 3 || parts[2].length < 40) {
       return {
         authorized: false,
-        status: authRes.status || 403,
-        code: authRes.code || "FORBIDDEN",
-        message: authRes.message || "عذراً، تعديل بورصة الطاقة مخصص للمسؤولين المعتمدين فقط.",
+        status: 401,
+        code: "UNAUTHORIZED",
+        message: "رمز المصادقة غير صالح. سجّل الدخول إلى Enerjoo ثم أعد المحاولة.",
       };
     }
 
-    return { authorized: true, status: 200, code: "OK", email: authRes.email || "admin" };
+    let header: any;
+    let payload: any;
+    try {
+      header = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf-8"));
+      payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8"));
+    } catch {
+      return {
+        authorized: false,
+        status: 401,
+        code: "UNAUTHORIZED",
+        message: "رمز المصادقة تالف أو غير صالح.",
+      };
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const configuredProjectId =
+      process.env.FIREBASE_PROJECT_ID ||
+      process.env.VITE_FIREBASE_PROJECT_ID ||
+      defaultFirebaseConfig.projectId ||
+      "gen-lang-client-0409057996";
+
+    if (
+      header?.alg !== "RS256" ||
+      typeof header?.kid !== "string" ||
+      !header.kid.trim() ||
+      typeof payload?.iss !== "string" ||
+      payload.iss !== `https://securetoken.google.com/${configuredProjectId}` ||
+      payload?.aud !== configuredProjectId ||
+      typeof payload?.sub !== "string" ||
+      !payload.sub.trim() ||
+      typeof payload?.exp !== "number" ||
+      payload.exp <= nowSec - 120
+    ) {
+      return {
+        authorized: false,
+        status: 401,
+        code: "UNAUTHORIZED",
+        message: "انتهت صلاحية جلسة تسجيل الدخول أو أن الرمز غير صالح. يرجى تسجيل الدخول مرة أخرى.",
+      };
+    }
+
+    const certs = await getGoogleSecureTokenCerts();
+    if (!certs) {
+      return {
+        authorized: false,
+        status: 503,
+        code: "AUTH_KEYS_UNAVAILABLE",
+        message: "تعذر الوصول إلى مفاتيح التحقق من الهوية حالياً. يرجى إعادة المحاولة.",
+      };
+    }
+    const certPem = certs[header.kid.trim()];
+    if (!certPem) {
+      return {
+        authorized: false,
+        status: 401,
+        code: "UNAUTHORIZED",
+        message: "مفتاح توقيع رمز المصادقة غير معتمد.",
+      };
+    }
+    try {
+      const verifier = crypto.createVerify("RSA-SHA256");
+      verifier.update(`${parts[0]}.${parts[1]}`);
+      verifier.end();
+      const sigValid = verifier.verify(certPem, Buffer.from(parts[2], "base64url"));
+      if (!sigValid) {
+        return {
+          authorized: false,
+          status: 401,
+          code: "UNAUTHORIZED",
+          message: "توقيع رمز المصادقة غير صالح.",
+        };
+      }
+    } catch {
+      return {
+        authorized: false,
+        status: 401,
+        code: "UNAUTHORIZED",
+        message: "فشل التحقق من توقيع رمز المصادقة.",
+      };
+    }
+
+    const uid = payload.sub.trim();
+    const tokenEmail = typeof payload.email === "string" ? payload.email.toLowerCase().trim() : "";
+    const emailVerified = payload.email_verified === true;
+
+    const splitCsv = (val?: string, lower = false) =>
+      typeof val === "string"
+        ? val
+            .split(",")
+            .map((v) => (lower ? v.trim().toLowerCase() : v.trim()))
+            .filter(Boolean)
+        : [];
+
+    const allAdminEmails = Array.from(
+      new Set([
+        ...SERVER_ADMIN_EMAILS.map((e) => e.toLowerCase().trim()),
+        ...splitCsv(process.env.PRODUCT_ADMIN_EMAILS, true),
+        ...splitCsv(process.env.ADMIN_EMAILS, true),
+      ])
+    );
+    const allAdminUids = Array.from(
+      new Set([
+        "enerjoo-admin-root",
+        ...splitCsv(process.env.PRODUCT_ADMIN_UIDS, false),
+        ...splitCsv(process.env.ADMIN_UIDS, false),
+      ])
+    );
+
+    if (allAdminEmails.length === 0 && allAdminUids.length === 0) {
+      return {
+        authorized: false,
+        status: 500,
+        code: "ADMIN_AUTH_NOT_CONFIGURED",
+        message: "إعدادات صلاحيات مسؤولي بورصة الطاقة غير مهيأة في الخادم (ADMIN_AUTH_NOT_CONFIGURED).",
+      };
+    }
+
+    const isExcluded = Boolean(tokenEmail) && SERVER_EXCLUDED_ADMIN_EMAILS.includes(tokenEmail);
+    const isAdminByUid = !isExcluded && allAdminUids.includes(uid);
+    const isEmailListed = !isExcluded && Boolean(tokenEmail) && allAdminEmails.includes(tokenEmail);
+    const isAdminByEmail = isEmailListed && emailVerified;
+    const isAdminByClaim = !isExcluded && (payload.admin === true || payload.role === "admin");
+
+    if (isAdminByUid || isAdminByEmail || isAdminByClaim) {
+      return { authorized: true, status: 200, code: "OK", email: tokenEmail || uid, uid };
+    }
+
+    return {
+      authorized: false,
+      status: 403,
+      code: "ADMIN_REQUIRED",
+      message:
+        isEmailListed && !emailVerified
+          ? "يتطلب تعديل بورصة الطاقة توثيق البريد الإلكتروني لحساب المسؤول أولاً."
+          : "هذه العملية مخصصة لمديري منصة Enerjoo فقط.",
+    };
   }
 
   // GET /api/energy-exchange, /api/energy-exchange/prices, /api/energy-exchange/ranges
