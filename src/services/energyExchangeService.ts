@@ -264,7 +264,7 @@ export function applySolarPanelPricing(
       ? 'out_of_bounds'
       : matchResult.isBrandInactive
       ? 'inactive'
-      : records.length === 0 && currentState.status === 'error'
+      : records.length === 0 && getCurrentEnergyExchangeState().status === 'error'
       ? 'api_error'
       : 'unconfigured';
 
@@ -443,6 +443,7 @@ export async function refreshEnergyExchange(): Promise<EnergyExchangeState> {
     try {
       const res = await fetch(`/api/energy-exchange/prices?_t=${Date.now()}`, {
         cache: 'no-store',
+        credentials: 'same-origin',
         headers: {
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache',
@@ -583,20 +584,105 @@ async function getAdminAuthToken(forceRefresh = false): Promise<string | null> {
 
 async function fetchWithAdminAuthRetry(url: string, init: RequestInit): Promise<Response> {
   const token = await getAdminAuthToken(false);
-  const headers = new Headers(init.headers || {});
+  const isPreviewContainer =
+    typeof window !== 'undefined' &&
+    (window.location.hostname.endsWith('.run.app') || window.location.hostname === 'localhost');
+  const isSameOriginApi = url.startsWith('/api');
+
+  const baseHeaders = new Headers(init.headers || {});
   if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
+    baseHeaders.set('Authorization', `Bearer ${token}`);
+    if (isPreviewContainer && isSameOriginApi) {
+      baseHeaders.set('X-Firebase-Auth', token);
+    }
   }
 
-  let res = await fetch(url, { ...init, headers });
+  if (isPreviewContainer && isSameOriginApi) {
+    await fetch('/api/health', { method: 'GET', cache: 'no-store', credentials: 'same-origin' }).catch(() => {});
+  }
+
+  const executeAttempt = async (currentToken: string | null, stripAuthOnPreviewRetry: boolean): Promise<Response> => {
+    const attemptHeaders = new Headers(baseHeaders);
+    if (currentToken) {
+      if (stripAuthOnPreviewRetry && isPreviewContainer && isSameOriginApi) {
+        attemptHeaders.delete('Authorization');
+        attemptHeaders.set('X-Firebase-Auth', currentToken);
+      } else {
+        attemptHeaders.set('Authorization', `Bearer ${currentToken}`);
+        if (isPreviewContainer && isSameOriginApi) {
+          attemptHeaders.set('X-Firebase-Auth', currentToken);
+        }
+      }
+    }
+
+    return fetch(url, {
+      ...init,
+      headers: attemptHeaders,
+      credentials: url.startsWith('/') ? 'same-origin' : init.credentials,
+    });
+  };
+
+  let res: Response | null = null;
+  let lastError: unknown = null;
+  const maxAttempts = isPreviewContainer && isSameOriginApi ? 3 : 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      if (attempt > 1 && isPreviewContainer && isSameOriginApi) {
+        await fetch('/api/health', { method: 'GET', cache: 'no-store', credentials: 'same-origin' }).catch(() => {});
+      }
+      res = await executeAttempt(token, attempt > 1);
+      const contentType = res.headers.get('content-type') || '';
+      const isNonJsonAuthInterception =
+        isSameOriginApi &&
+        (res.status === 401 || res.status === 403) &&
+        !contentType.includes('application/json');
+      const isTransientGateway =
+        res.redirected ||
+        res.status === 502 ||
+        res.status === 504 ||
+        isNonJsonAuthInterception ||
+        (isSameOriginApi && contentType.includes('text/html'));
+
+      if (isTransientGateway && attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+        continue;
+      }
+      break;
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+        continue;
+      }
+    }
+  }
+
+  if (!res) {
+    throw lastError instanceof Error ? lastError : new Error('تعذر الاتصال بخادم بورصة الطاقة.');
+  }
+
   if (res.status === 401 && auth.currentUser) {
     const freshToken = await getAdminAuthToken(true);
     if (freshToken) {
-      headers.set('Authorization', `Bearer ${freshToken}`);
-      res = await fetch(url, { ...init, headers });
+      res = await executeAttempt(freshToken, false);
     }
   }
+
   return res;
+}
+
+function extractExchangeApiErrorMessage(data: any, fallback: string): string {
+  if (typeof data?.error?.message === 'string' && data.error.message.trim()) {
+    return data.error.message.trim();
+  }
+  if (typeof data?.error === 'string' && data.error.trim()) {
+    return data.error.trim();
+  }
+  if (typeof data?.message === 'string' && data.message.trim()) {
+    return data.message.trim();
+  }
+  return fallback;
 }
 
 function validateApprovedBrandName(brand: string): SolarPanelBrand {
@@ -688,8 +774,7 @@ export async function saveSolarPanelBrandRanges(
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const errMsg = data?.error?.message || data?.error || 'فشل حفظ نطاقات العلامة التجارية في قاعدة البيانات';
-    throw new Error(typeof errMsg === 'string' ? errMsg : 'فشل حفظ النطاقات');
+    throw new Error(extractExchangeApiErrorMessage(data, 'فشل حفظ نطاقات العلامة التجارية في قاعدة البيانات'));
   }
 
   return await refreshEnergyExchange();
@@ -720,8 +805,7 @@ export async function toggleSolarPanelBrandActive(
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const errMsg = data?.error?.message || data?.error || 'فشل تحديث حالة تفعيل العلامة التجارية';
-    throw new Error(typeof errMsg === 'string' ? errMsg : 'فشل تحديث حالة التفعيل');
+    throw new Error(extractExchangeApiErrorMessage(data, 'فشل تحديث حالة تفعيل العلامة التجارية'));
   }
 
   return await refreshEnergyExchange();
@@ -765,8 +849,7 @@ export async function addSolarPanelBrandRange(
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const errMsg = data?.error?.message || data?.error || 'فشل إضافة نطاق القدرة في قاعدة البيانات';
-    throw new Error(typeof errMsg === 'string' ? errMsg : 'فشل إضافة نطاق القدرة');
+    throw new Error(extractExchangeApiErrorMessage(data, 'فشل إضافة نطاق القدرة في قاعدة البيانات'));
   }
 
   await refreshEnergyExchange();
@@ -814,8 +897,7 @@ export async function updateSolarPanelBrandRange(
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const errMsg = data?.error?.message || data?.error || 'فشل تعديل نطاق القدرة في قاعدة البيانات';
-    throw new Error(typeof errMsg === 'string' ? errMsg : 'فشل تعديل نطاق القدرة');
+    throw new Error(extractExchangeApiErrorMessage(data, 'فشل تعديل نطاق القدرة في قاعدة البيانات'));
   }
 
   await refreshEnergyExchange();
@@ -836,8 +918,7 @@ export async function deleteSolarPanelBrandRange(priceId: string): Promise<void>
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const errMsg = data?.error?.message || data?.error || 'فشل حذف النطاق من قاعدة البيانات';
-    throw new Error(typeof errMsg === 'string' ? errMsg : 'فشل حذف النطاق');
+    throw new Error(extractExchangeApiErrorMessage(data, 'فشل حذف النطاق من قاعدة البيانات'));
   }
 
   await refreshEnergyExchange();

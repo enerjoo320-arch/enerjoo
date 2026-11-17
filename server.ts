@@ -3361,6 +3361,31 @@ ${urls.join("\n")}
     };
   }
 
+  function forwardEnergyExchangeUpstreamResponse(
+    cfRes: globalThis.Response,
+    rawBodyText: string,
+    expressRes: express.Response
+  ) {
+    if (
+      cfRes.status === 503 &&
+      (rawBodyText.includes("FIRESTORE_SERVICE_ERROR") || rawBodyText.includes("اعتماد المورد"))
+    ) {
+      return expressRes.status(503).json({
+        success: false,
+        ok: false,
+        error: {
+          code: "WORKER_OUTDATED_DEPLOYMENT",
+          message:
+            "الخادم السحابي (enerjoo-api.enerjoo320.workers.dev) لا يزال يعمل بالإصدار القديم الذي يتحقق من اعتماد المورد عبر Firestore. تم إصلاح الكود في worker/index.ts ويلزم نشره إلى Cloudflare عبر (wrangler deploy) لتطبيق التحديث على البورصة الحية.",
+        },
+      });
+    }
+    return expressRes
+      .status(cfRes.status)
+      .set("Content-Type", cfRes.headers.get("content-type") || "application/json")
+      .send(rawBodyText);
+  }
+
   // GET /api/energy-exchange, /api/energy-exchange/prices, /api/energy-exchange/ranges
   app.get(["/api/energy-exchange", "/api/energy-exchange/prices", "/api/energy-exchange/ranges", "/energy-exchange/prices"], async (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
@@ -3516,7 +3541,7 @@ ${urls.join("\n")}
           isWorker404 = true;
         } else {
           const text = await cfRes.text();
-          return res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(text);
+          return forwardEnergyExchangeUpstreamResponse(cfRes, text, res);
         }
       } catch {
         return res.status(503).json({
@@ -3726,7 +3751,7 @@ ${urls.join("\n")}
           isWorker404 = true;
         } else {
           const data = await cfRes.text();
-          return res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(data);
+          return forwardEnergyExchangeUpstreamResponse(cfRes, data, res);
         }
       } catch {
         return res.status(503).json({
@@ -3829,7 +3854,7 @@ ${urls.join("\n")}
           isWorker404 = true;
         } else {
           const text = await cfRes.text();
-          return res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(text);
+          return forwardEnergyExchangeUpstreamResponse(cfRes, text, res);
         }
       } catch {
         return res.status(503).json({
@@ -3979,7 +4004,7 @@ ${urls.join("\n")}
           isWorker404 = true;
         } else {
           const text = await cfRes.text();
-          return res.status(cfRes.status).set("Content-Type", cfRes.headers.get("content-type") || "application/json").send(text);
+          return forwardEnergyExchangeUpstreamResponse(cfRes, text, res);
         }
       } catch {
         return res.status(503).json({
